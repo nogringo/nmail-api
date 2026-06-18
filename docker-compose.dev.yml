@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nmail
+      POSTGRES_USER: nmail
+      POSTGRES_PASSWORD: nmail
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nmail -d nmail"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - nmail-api-postgres-dev:/var/lib/postgresql
+
+volumes:
+  nmail-api-postgres-dev:

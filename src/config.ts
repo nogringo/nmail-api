@@ -14,6 +14,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databaseUrl,
     protectedEmailDomains: parseProtectedDomains(env.PROTECTED_EMAIL_DOMAINS),
     inboundDecisionToken,
+    adminPassword: parseOptionalSecret(env.ADMIN_PASSWORD),
   }
 }
 
@@ -46,4 +47,9 @@ function parseRequiredSecret(value: string | undefined, name: string): string {
   }
 
   return secret
+}
+
+function parseOptionalSecret(value: string | undefined): string | undefined {
+  const secret = value?.trim()
+  return secret || undefined
 }

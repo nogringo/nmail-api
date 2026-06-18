@@ -3,6 +3,7 @@ export interface AppConfig {
   databaseUrl: string
   protectedEmailDomains: Set<string>
   inboundDecisionToken: string
+  adminPassword?: string
 }
 
 export type IdentityVisibility = 'public' | 'private'
@@ -17,9 +18,30 @@ export interface UserIdentity {
   active: boolean
 }
 
+export interface AdminIdentity extends UserIdentity {
+  id: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface IdentityInput {
+  domain: string
+  localPart: string
+  pubkey: string
+  relays: string[]
+  visibility: IdentityVisibility
+  mailEnabled: boolean
+  active: boolean
+}
+
 export interface IdentityRepository {
   findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
   findMailEnabledIdentities(domain: string, localParts: string[]): Promise<Map<string, UserIdentity>>
+  listIdentities?(search?: string): Promise<AdminIdentity[]>
+  createIdentity?(identity: IdentityInput): Promise<AdminIdentity>
+  updateIdentity?(id: string, identity: IdentityInput): Promise<AdminIdentity | null>
+  setIdentityActive?(id: string, active: boolean): Promise<AdminIdentity | null>
+  deleteIdentity?(id: string): Promise<boolean>
   close?(): Promise<void>
 }
 

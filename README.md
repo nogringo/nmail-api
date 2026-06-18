@@ -17,6 +17,7 @@ Environment variables:
 - `DATABASE_URL`: Postgres connection string.
 - `PROTECTED_EMAIL_DOMAINS`: comma-separated domains that require an active NIP-05 identity before inbound mail is accepted. Defaults to `nmail.li`.
 - `INBOUND_DECISION_TOKEN`: shared secret required by `POST /inbound/decision`.
+- `ADMIN_PASSWORD`: optional password that enables the `/admin` identity management UI.
 
 ## Identity Model
 
@@ -67,12 +68,48 @@ values (
 );
 ```
 
+## Admin UI
+
+Set `ADMIN_PASSWORD` to enable the built-in admin console:
+
+```sh
+ADMIN_PASSWORD=change-me npm run dev
+```
+
+Open `http://localhost:3000/admin` and sign in with the configured password.
+The console manages only `identities`: create, update, activate/deactivate, and
+delete. If `ADMIN_PASSWORD` is not set, the admin routes are not registered.
+
 ## Development
 
 ```sh
 npm install
 npm run typecheck
 npm test
+npm run dev
+```
+
+`npm run dev` loads `.env` automatically when the file exists.
+
+Run the local development database:
+
+```sh
+docker compose -f docker-compose.dev.yml up -d
+```
+
+The dev database uses `nmail:nmail` on `localhost:5432`, matching the
+`DATABASE_URL` from `.env.example`.
+
+Apply the database migration to the dev Postgres container:
+
+```sh
+docker compose -f docker-compose.dev.yml exec -T postgres \
+  psql -U nmail -d nmail < migrations/001_create_identities.sql
+```
+
+Then run the API directly on your machine:
+
+```sh
 npm run dev
 ```
 

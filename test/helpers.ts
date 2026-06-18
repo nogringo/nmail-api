@@ -1,11 +1,15 @@
-import type { IdentityRepository, UserIdentity } from '../src/types.js'
+import type { AdminIdentity, IdentityInput, IdentityRepository, UserIdentity } from '../src/types.js'
 
 export class MemoryIdentityRepository implements IdentityRepository {
-  readonly identities = new Map<string, UserIdentity>()
+  readonly identities = new Map<string, AdminIdentity>()
   fail = false
+  private nextId = 1
 
   add(identity: UserIdentity): void {
-    this.identities.set(key(identity.domain, identity.localPart), identity)
+    this.identities.set(
+      key(identity.domain, identity.localPart),
+      toAdminIdentity(String(this.nextId++), identity),
+    )
   }
 
   async findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
@@ -26,6 +30,68 @@ export class MemoryIdentityRepository implements IdentityRepository {
 
     return found
   }
+
+  async listIdentities(search = ''): Promise<AdminIdentity[]> {
+    const normalizedSearch = search.trim().toLowerCase()
+    return [...this.identities.values()]
+      .filter(
+        (identity) =>
+          !normalizedSearch ||
+          identity.domain.includes(normalizedSearch) ||
+          identity.localPart.includes(normalizedSearch) ||
+          identity.pubkey.includes(normalizedSearch),
+      )
+      .sort((left, right) => `${left.domain}:${left.localPart}`.localeCompare(`${right.domain}:${right.localPart}`))
+  }
+
+  async createIdentity(input: IdentityInput): Promise<AdminIdentity> {
+    const identity = toAdminIdentity(String(this.nextId++), input)
+    const identityKey = key(identity.domain, identity.localPart)
+    if (this.identities.has(identityKey)) {
+      throw Object.assign(new Error('duplicate'), { code: '23505', constraint: 'identities_unique_name' })
+    }
+
+    this.identities.set(identityKey, identity)
+    return identity
+  }
+
+  async updateIdentity(id: string, input: IdentityInput): Promise<AdminIdentity | null> {
+    const current = this.findById(id)
+    if (!current) return null
+
+    const next = { ...toAdminIdentity(id, input), createdAt: current.createdAt }
+    const oldKey = key(current.domain, current.localPart)
+    const newKey = key(next.domain, next.localPart)
+    const duplicate = this.identities.get(newKey)
+    if (duplicate && duplicate.id !== id) {
+      throw Object.assign(new Error('duplicate'), { code: '23505', constraint: 'identities_unique_name' })
+    }
+
+    this.identities.delete(oldKey)
+    this.identities.set(newKey, next)
+    return next
+  }
+
+  async setIdentityActive(id: string, active: boolean): Promise<AdminIdentity | null> {
+    const current = this.findById(id)
+    if (!current) return null
+
+    const next = { ...current, active, updatedAt: new Date().toISOString() }
+    this.identities.set(key(next.domain, next.localPart), next)
+    return next
+  }
+
+  async deleteIdentity(id: string): Promise<boolean> {
+    const current = this.findById(id)
+    if (!current) return false
+
+    this.identities.delete(key(current.domain, current.localPart))
+    return true
+  }
+
+  private findById(id: string): AdminIdentity | null {
+    return [...this.identities.values()].find((identity) => identity.id === id) ?? null
+  }
 }
 
 export function identity(overrides: Partial<UserIdentity> = {}): UserIdentity {
@@ -43,4 +109,14 @@ export function identity(overrides: Partial<UserIdentity> = {}): UserIdentity {
 
 function key(domain: string, localPart: string): string {
   return `${domain}:${localPart}`
+}
+
+function toAdminIdentity(id: string, identity: UserIdentity): AdminIdentity {
+  const now = new Date().toISOString()
+  return {
+    ...identity,
+    id,
+    createdAt: now,
+    updatedAt: now,
+  }
 }
