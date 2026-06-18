@@ -1,0 +1,33 @@
+{
+  "name": "nmail-api",
+  "version": "0.1.0",
+  "description": "NIP-05 identity and inbound mail policy API.",
+  "keywords": [
+    "nostr",
+    "nip05",
+    "identity",
+    "inbound-email",
+    "mail-policy"
+  ],
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "fastify": "^5.8.5",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

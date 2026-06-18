@@ -1,0 +1,11 @@
+services:
+  api:
+    image: ghcr.io/nogringo/nmail-api:main
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL:-}
+      PROTECTED_EMAIL_DOMAINS: ${PROTECTED_EMAIL_DOMAINS:-nmail.li}
+      INBOUND_DECISION_TOKEN: ${INBOUND_DECISION_TOKEN:?Set INBOUND_DECISION_TOKEN}
