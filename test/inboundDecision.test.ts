@@ -58,6 +58,115 @@ test('Inbound decision allows active identities on protected domains', async () 
   await app.close()
 })
 
+test('Inbound decision allows npub recipients matching a mail-enabled domain identity', async () => {
+  const repo = new MemoryIdentityRepository()
+  repo.add(identity({ localPart: 'alice', pubkey: '0'.repeat(64) }))
+  const app = await buildApp(repo, appConfig)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/inbound/decision',
+    headers: { 'x-inbound-decision-token': 'secret-token' },
+    payload: {
+      ...basePayload,
+      message: {
+        ...basePayload.message,
+        recipients: ['npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzqujme@nmail.li'],
+      },
+    },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), { decision: 'allow' })
+
+  await app.close()
+})
+
+test('Inbound decision allows hex pubkey recipients matching a mail-enabled domain identity', async () => {
+  const repo = new MemoryIdentityRepository()
+  repo.add(identity({ localPart: 'alice', pubkey: '1'.repeat(64) }))
+  const app = await buildApp(repo, appConfig)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/inbound/decision',
+    headers: { 'x-inbound-decision-token': 'secret-token' },
+    payload: {
+      ...basePayload,
+      message: { ...basePayload.message, recipients: [`${'1'.repeat(64)}@nmail.li`] },
+    },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), { decision: 'allow' })
+
+  await app.close()
+})
+
+test('Inbound decision allows base36 pubkey recipients matching a mail-enabled domain identity', async () => {
+  const repo = new MemoryIdentityRepository()
+  repo.add(identity({ localPart: 'alice', pubkey: '2'.repeat(64) }))
+  const app = await buildApp(repo, appConfig)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/inbound/decision',
+    headers: { 'x-inbound-decision-token': 'secret-token' },
+    payload: {
+      ...basePayload,
+      message: { ...basePayload.message, recipients: ['umjypn2oc2xvmr60is84v8ttwfpv7mc7uxxpw7832y1qtt1k2@nmail.li'] },
+    },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), { decision: 'allow' })
+
+  await app.close()
+})
+
+test('Inbound decision rejects base36 recipients outside pubkey length bounds', async () => {
+  const repo = new MemoryIdentityRepository()
+  repo.add(identity({ localPart: 'alice', pubkey: '0'.repeat(63) + '1' }))
+  const app = await buildApp(repo, appConfig)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/inbound/decision',
+    headers: { 'x-inbound-decision-token': 'secret-token' },
+    payload: {
+      ...basePayload,
+      message: { ...basePayload.message, recipients: ['1@nmail.li'] },
+    },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), {
+    decision: 'deny',
+    reason: 'unknown_recipient',
+    message: 'Recipient is not configured for inbound mail delivery',
+  })
+
+  await app.close()
+})
+
+test('Inbound decision prefers local identities over ambiguous base36 local parts', async () => {
+  const repo = new MemoryIdentityRepository()
+  repo.add(identity({ localPart: 'alice', pubkey: '3'.repeat(64) }))
+  const app = await buildApp(repo, appConfig)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/inbound/decision',
+    headers: { 'x-inbound-decision-token': 'secret-token' },
+    payload: basePayload,
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), { decision: 'allow' })
+
+  await app.close()
+})
+
 test('Inbound decision allows private mail-enabled identities on protected domains', async () => {
   const repo = new MemoryIdentityRepository()
   repo.add(identity({ visibility: 'private' }))

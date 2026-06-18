@@ -1,6 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { timingSafeEqual } from 'node:crypto'
 import { parseEmailAddress } from '../email.js'
+import { decodeBase36Pubkey, decodeNpub } from '../nostr.js'
 import type { AppConfig, IdentityRepository, InboundDecisionPayload, InboundDecisionResponse } from '../types.js'
 
 export function createInboundDecisionHandler(
@@ -47,21 +48,40 @@ export async function decideDelivery(
     const parsed = parseEmailAddress(recipient)
     if (!parsed || !protectedEmailDomains.has(parsed.domain)) continue
 
-    const required = requiredByDomain.get(parsed.domain) ?? new Set<string>()
-    required.add(parsed.localPart)
-    requiredByDomain.set(parsed.domain, required)
+    const pubkey = await resolveRecipientPubkey(parsed.domain, parsed.localPart, repo)
+    if (!pubkey) return denyUnknownRecipient()
+
+    const requiredPubkeys = requiredByDomain.get(parsed.domain) ?? new Set<string>()
+    requiredPubkeys.add(pubkey)
+    requiredByDomain.set(parsed.domain, requiredPubkeys)
   }
 
-  for (const [domain, localParts] of requiredByDomain) {
-    const identities = await repo.findMailEnabledIdentities(domain, [...localParts])
-    for (const localPart of localParts) {
-      if (!identities.has(localPart)) {
+  for (const [domain, pubkeys] of requiredByDomain) {
+    const identities = await repo.findMailEnabledIdentitiesByPubkeys(domain, [...pubkeys])
+    for (const pubkey of pubkeys) {
+      if (!identities.has(pubkey)) {
         return denyUnknownRecipient()
       }
     }
   }
 
   return { decision: 'allow' }
+}
+
+async function resolveRecipientPubkey(
+  domain: string,
+  localPart: string,
+  repo: IdentityRepository,
+): Promise<string | null> {
+  if (/^[0-9a-f]{64}$/.test(localPart)) return localPart
+
+  const npub = decodeNpub(localPart)
+  if (npub) return npub
+
+  const identity = await repo.findIdentity(domain, localPart)
+  if (identity) return identity.pubkey
+
+  return decodeBase36Pubkey(localPart)
 }
 
 function parseDecisionPayload(value: unknown): InboundDecisionPayload | null {

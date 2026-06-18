@@ -12,6 +12,12 @@ export class MemoryIdentityRepository implements IdentityRepository {
     )
   }
 
+  async findIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
+    if (this.fail) throw new Error('database unavailable')
+
+    return this.identities.get(key(domain, localPart)) ?? null
+  }
+
   async findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
     if (this.fail) throw new Error('database unavailable')
 
@@ -26,6 +32,21 @@ export class MemoryIdentityRepository implements IdentityRepository {
     for (const localPart of localParts) {
       const identity = this.identities.get(key(domain, localPart))
       if (identity?.active && identity.mailEnabled) found.set(localPart, identity)
+    }
+
+    return found
+  }
+
+  async findMailEnabledIdentitiesByPubkeys(domain: string, pubkeys: string[]): Promise<Map<string, UserIdentity>> {
+    if (this.fail) throw new Error('database unavailable')
+
+    const requiredPubkeys = new Set(pubkeys)
+    const found = new Map<string, UserIdentity>()
+
+    for (const identity of this.identities.values()) {
+      if (identity.domain === domain && requiredPubkeys.has(identity.pubkey) && identity.active && identity.mailEnabled) {
+        found.set(identity.pubkey, identity)
+      }
     }
 
     return found

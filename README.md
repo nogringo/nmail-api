@@ -15,7 +15,7 @@ Environment variables:
 
 - `PORT`: HTTP port, default `3000`.
 - `DATABASE_URL`: Postgres connection string.
-- `PROTECTED_EMAIL_DOMAINS`: comma-separated domains that require an active NIP-05 identity before inbound mail is accepted. Defaults to `nmail.li`.
+- `PROTECTED_EMAIL_DOMAINS`: comma-separated domains that require a known mail-enabled pubkey before inbound mail is accepted. Defaults to `nmail.li`.
 - `INBOUND_DECISION_TOKEN`: shared secret required by `POST /inbound/decision`.
 - `ADMIN_PASSWORD`: optional password that enables the `/admin` identity management UI.
 
@@ -28,6 +28,13 @@ and inbound mail policy.
 - `visibility = 'private'`: hidden from public NIP-05 resolution.
 - `mail_enabled = true`: usable by the inbound mail decision endpoint.
 - `active = false`: disabled everywhere.
+
+For protected inbound mail domains, recipients may use a local identity
+(`alice@nmail.li`), an encoded Nostr pubkey (`npub...@nmail.li`), a raw
+64-character hex pubkey, or a base36-encoded pubkey. The decision endpoint
+resolves the recipient to a pubkey, then accepts delivery when an active,
+mail-enabled identity exists with the same protected domain and pubkey. Local
+identities are checked before base36 decoding so normal aliases keep working.
 
 ## Database
 

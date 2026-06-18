@@ -35,8 +35,10 @@ export interface IdentityInput {
 }
 
 export interface IdentityRepository {
+  findIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
   findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
   findMailEnabledIdentities(domain: string, localParts: string[]): Promise<Map<string, UserIdentity>>
+  findMailEnabledIdentitiesByPubkeys(domain: string, pubkeys: string[]): Promise<Map<string, UserIdentity>>
   listIdentities?(search?: string): Promise<AdminIdentity[]>
   createIdentity?(identity: IdentityInput): Promise<AdminIdentity>
   updateIdentity?(id: string, identity: IdentityInput): Promise<AdminIdentity | null>
