@@ -45,6 +45,7 @@ interface PlanRow {
   per_day: number | string
   max_message_bytes: number | string
   max_recipients: number | string
+  max_aliases: number | string
   allowed_domains: unknown
   is_default: boolean
   created_at?: Date | string
@@ -77,6 +78,19 @@ export class PgIdentityRepository implements IdentityRepository, AccountReposito
 
     const row = result.rows[0]
     return row ? toIdentity(row) : null
+  }
+
+  async listIdentitiesByPubkey(pubkey: string): Promise<UserIdentity[]> {
+    const result = await this.pool.query<IdentityRow>(
+      `
+        select domain, local_part, pubkey, visibility
+        from identities
+        where pubkey = $1
+      `,
+      [pubkey],
+    )
+
+    return result.rows.map(toIdentity)
   }
 
   async findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
@@ -260,7 +274,7 @@ export class PgIdentityRepository implements IdentityRepository, AccountReposito
     if (name) {
       const named = await this.pool.query<PlanRow>(
         `
-          select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default
+          select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, max_aliases, allowed_domains, is_default
           from plans where name = $1 limit 1
         `,
         [name],
@@ -270,7 +284,7 @@ export class PgIdentityRepository implements IdentityRepository, AccountReposito
 
     const fallback = await this.pool.query<PlanRow>(
       `
-        select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default
+        select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, max_aliases, allowed_domains, is_default
         from plans where is_default = true limit 1
       `,
     )
@@ -318,7 +332,7 @@ export class PgIdentityRepository implements IdentityRepository, AccountReposito
   async listPlans(): Promise<Plan[]> {
     const result = await this.pool.query<PlanRow>(
       `
-        select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default, created_at, updated_at
+        select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, max_aliases, allowed_domains, is_default, created_at, updated_at
         from plans
         order by is_default desc, name asc
       `,
@@ -337,18 +351,19 @@ export class PgIdentityRepository implements IdentityRepository, AccountReposito
 
       const result = await client.query<PlanRow>(
         `
-          insert into plans (name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default)
-          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+          insert into plans (name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, max_aliases, allowed_domains, is_default)
+          values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
           on conflict (name) do update set
             per_minute = excluded.per_minute,
             per_hour = excluded.per_hour,
             per_day = excluded.per_day,
             max_message_bytes = excluded.max_message_bytes,
             max_recipients = excluded.max_recipients,
+            max_aliases = excluded.max_aliases,
             allowed_domains = excluded.allowed_domains,
             is_default = excluded.is_default,
             updated_at = now()
-          returning name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default, created_at, updated_at
+          returning name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, max_aliases, allowed_domains, is_default, created_at, updated_at
         `,
         [
           name,
@@ -357,6 +372,7 @@ export class PgIdentityRepository implements IdentityRepository, AccountReposito
           limits.perDay,
           limits.maxMessageBytes,
           limits.maxRecipients,
+          limits.maxAliases,
           JSON.stringify(limits.allowedDomains),
           isDefault,
         ],
@@ -409,6 +425,7 @@ function toPlan(row: PlanRow): Plan {
     perDay: Number(row.per_day),
     maxMessageBytes: Number(row.max_message_bytes),
     maxRecipients: Number(row.max_recipients),
+    maxAliases: Number(row.max_aliases),
     allowedDomains: toStringArray(row.allowed_domains),
     isDefault: row.is_default,
     createdAt: toIsoString(row.created_at),

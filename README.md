@@ -5,6 +5,7 @@ TypeScript API for identity resolution and inbound mail policy:
 - `GET /.well-known/nostr.json?name=<local_part>` resolves NIP-05 identities.
 - `POST /inbound/decision` answers the inbound SMTP decision protocol.
 - `POST /outbound/decision` answers the outbound (nostr → SMTP) decision protocol, enabled only when `OUTBOUND_DECISION_TOKEN` is set.
+- `POST /aliases/claim` lets a user claim a provisioned alias by posting a signed Nostr event (kind `27240`, `address` tag). No token: the signature is the auth. Enforces the per-plan `max_aliases` limit (free 2, premium 10). See [docs/AccountModel.md](docs/AccountModel.md).
 
 ## Configuration
 
@@ -207,13 +208,15 @@ Outbound limits are grouped into **plans**. Each account references a plan
 (`accounts.plan`); accounts with no plan fall back to the default. Two plans are
 seeded by migration `003`:
 
-| Plan | Per minute | Per hour | Per day | Max `.eml` size | Max recipients |
-|---|---|---|---|---|---|
-| `free` (default) | 5 | 30 | 50 | 10 MB | 5 |
-| `premium` | 10 | 100 | 500 | 25 MB | 10 |
+| Plan | Per minute | Per hour | Per day | Max `.eml` size | Max recipients | Max aliases |
+|---|---|---|---|---|---|---|
+| `free` (default) | 5 | 30 | 50 | 10 MB | 5 | 2 |
+| `premium` | 10 | 100 | 500 | 25 MB | 10 | 10 |
 
 Plans are managed from the admin UI (`Plans` tab) and per-pubkey plan choice
-from the `Accounts` tab; new plans can be added. Each plan also has
+from the `Accounts` tab; new plans can be added. `max_aliases` caps how many
+provisioned aliases an account may claim via `POST /aliases/claim`
+(pubkey-encoded addresses are not aliases and do not count). Each plan also has
 `allowed_domains`: the domains it may create or send pubkey-encoded addresses on
 (empty = all managed domains; provisioned aliases are exempt and keep working
 after a downgrade). The message size limit is measured on the encoded `.eml`,

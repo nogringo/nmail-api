@@ -11,6 +11,22 @@ export function decodeNpub(value: string): string | null {
   return Buffer.from(bytes).toString('hex')
 }
 
+// A local part is "encoded" when it decodes to a pubkey on its own (hex64,
+// npub or base36). Such addresses resolve without the database, so they are not
+// aliases and are not claimable.
+export function decodeEncodedLocalPart(localPart: string): string | null {
+  if (/^[0-9a-f]{64}$/.test(localPart)) return localPart
+
+  const npub = decodeNpub(localPart)
+  if (npub) return npub
+
+  return decodeBase36Pubkey(localPart)
+}
+
+export function isEncodedLocalPart(localPart: string): boolean {
+  return decodeEncodedLocalPart(localPart) !== null
+}
+
 export function decodeBase36Pubkey(value: string): string | null {
   if (value.length < 48 || value.length > 52) return null
   if (!/^[0-9a-z]+$/.test(value)) return null

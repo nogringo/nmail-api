@@ -12,6 +12,7 @@ export const FREE_PLAN: Plan = {
   perDay: 50,
   maxMessageBytes: 10 * MB,
   maxRecipients: 5,
+  maxAliases: 2,
   allowedDomains: [],
   isDefault: true,
 }
@@ -23,6 +24,7 @@ export const PREMIUM_PLAN: Plan = {
   perDay: 500,
   maxMessageBytes: 25 * MB,
   maxRecipients: 10,
+  maxAliases: 10,
   allowedDomains: [],
   isDefault: false,
 }
@@ -97,6 +99,7 @@ export function sanitizePlanLimits(value: unknown): PlanLimits | null {
   const perDay = toCount(input.perDay)
   const maxMessageBytes = toBytes(input.maxMessageBytes)
   const maxRecipients = toCount(input.maxRecipients)
+  const maxAliases = toCount(input.maxAliases)
   const allowedDomains = toDomainList(input.allowedDomains)
 
   if (
@@ -105,12 +108,13 @@ export function sanitizePlanLimits(value: unknown): PlanLimits | null {
     perDay === null ||
     maxMessageBytes === null ||
     maxRecipients === null ||
+    maxAliases === null ||
     allowedDomains === null
   ) {
     return null
   }
 
-  return { perMinute, perHour, perDay, maxMessageBytes, maxRecipients, allowedDomains }
+  return { perMinute, perHour, perDay, maxMessageBytes, maxRecipients, maxAliases, allowedDomains }
 }
 
 function toDomainList(value: unknown): string[] | null {

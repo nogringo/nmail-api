@@ -792,6 +792,7 @@ const adminPage = String.raw`<!doctype html>
                   <th>Rate (min / hour / day)</th>
                   <th>Max size</th>
                   <th>Max rcpt</th>
+                  <th>Max alias</th>
                   <th>Domains</th>
                   <th>Actions</th>
                 </tr>
@@ -825,9 +826,14 @@ const adminPage = String.raw`<!doctype html>
                   <input id="plan-max-recipients" type="number" min="0" required>
                 </label>
               </div>
-              <label>Max message size (MB, .eml)
-                <input id="plan-max-mb" type="number" min="0" step="0.1" required>
-              </label>
+              <div class="form-grid">
+                <label>Max aliases
+                  <input id="plan-max-aliases" type="number" min="0" required>
+                </label>
+                <label>Max message size (MB, .eml)
+                  <input id="plan-max-mb" type="number" min="0" step="0.1" required>
+                </label>
+              </div>
               <label>Allowed sending domains</label>
               <div id="plan-domains" class="checks"></div>
               <p class="hint" style="margin: 0">None checked = all managed domains.</p>
@@ -1125,6 +1131,7 @@ const adminPage = String.raw`<!doctype html>
         '<td data-label="Rate">' + plan.perMinute + ' / ' + plan.perHour + ' / ' + plan.perDay + '</td>' +
         '<td data-label="Max size">' + formatBytes(plan.maxMessageBytes) + '</td>' +
         '<td data-label="Max rcpt">' + plan.maxRecipients + '</td>' +
+        '<td data-label="Max alias">' + plan.maxAliases + '</td>' +
         '<td data-label="Domains">' + planDomainsLabel + '</td>' +
         '<td data-label="Actions" class="actions"><div class="row-actions">' +
           '<button class="secondary" type="button" data-plan-action="edit" data-name="' + escapeHtml(plan.name) + '">Edit</button>' +
@@ -1140,6 +1147,7 @@ const adminPage = String.raw`<!doctype html>
       document.querySelector('#plan-per-hour').value = plan.perHour ?? '';
       document.querySelector('#plan-per-day').value = plan.perDay ?? '';
       document.querySelector('#plan-max-recipients').value = plan.maxRecipients ?? '';
+      document.querySelector('#plan-max-aliases').value = plan.maxAliases ?? '';
       document.querySelector('#plan-max-mb').value = plan.maxMessageBytes != null ? (plan.maxMessageBytes / MB) : '';
       document.querySelector('#plan-default').checked = Boolean(plan.isDefault);
       renderPlanDomains(plan.allowedDomains || []);
@@ -1159,6 +1167,7 @@ const adminPage = String.raw`<!doctype html>
         perHour: Number(document.querySelector('#plan-per-hour').value),
         perDay: Number(document.querySelector('#plan-per-day').value),
         maxRecipients: Number(document.querySelector('#plan-max-recipients').value),
+        maxAliases: Number(document.querySelector('#plan-max-aliases').value),
         maxMessageBytes: Math.round(Number(document.querySelector('#plan-max-mb').value) * MB),
         allowedDomains: Array.from(document.querySelectorAll('.plan-domain:checked')).map((input) => input.value),
         isDefault: document.querySelector('#plan-default').checked,

@@ -55,6 +55,12 @@ export class MemoryIdentityRepository implements IdentityRepository, AccountRepo
     return this.identities.get(key(domain, localPart)) ?? null
   }
 
+  async listIdentitiesByPubkey(pubkey: string): Promise<UserIdentity[]> {
+    if (this.fail) throw new Error('database unavailable')
+
+    return [...this.identities.values()].filter((identity) => identity.pubkey === pubkey)
+  }
+
   async findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
     if (this.fail) throw new Error('database unavailable')
 

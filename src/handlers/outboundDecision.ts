@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { parseEmailAddress } from '../email.js'
-import { decodeBase36Pubkey, decodeNpub } from '../nostr.js'
+import { decodeEncodedLocalPart, decodeNpub } from '../nostr.js'
 import { countRecipients, isDomainAllowed, isRateLimited, messageByteSize } from '../policy.js'
 import type {
   AccountRepository,
@@ -102,15 +102,6 @@ async function resolveOwnership(
   if (decoded && decoded === sender) return 'encoded'
 
   return 'denied'
-}
-
-function decodeEncodedLocalPart(localPart: string): string | null {
-  if (/^[0-9a-f]{64}$/.test(localPart)) return localPart
-
-  const npub = decodeNpub(localPart)
-  if (npub) return npub
-
-  return decodeBase36Pubkey(localPart)
 }
 
 function parseDecisionPayload(value: unknown): OutboundDecisionPayload | null {

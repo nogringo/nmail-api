@@ -8,7 +8,8 @@ survives context loss between sessions.
 
 ```
 plans      (name PK)     per_minute, per_hour, per_day, max_message_bytes,
-                         max_recipients, allowed_domains (jsonb[]), is_default
+                         max_recipients, max_aliases, allowed_domains (jsonb[]),
+                         is_default
 accounts   (pubkey PK)   active, mail_enabled, plan -> plans (NULL = default),
                          relays (jsonb[]), created_at, updated_at
 identities (domain,      pubkey -> accounts, visibility, created_at, updated_at
@@ -23,7 +24,9 @@ outbound_sends           pubkey, gift_wrap_id, created_at
   Holds only what is specific to the name: `visibility` (NIP-05 public/private).
   It no longer carries `mail_enabled`, `active` or `relays` (moved to account).
 - **plan** = quotas + `allowed_domains` (the domains the plan may *create/use*
-  addresses on). `NULL` plan on an account means "use the default plan".
+  addresses on) + `max_aliases` (how many provisioned aliases the account may
+  claim: free = 2, premium = 10). `NULL` plan on an account means "use the
+  default plan".
 
 ## Two classes of sending address
 
@@ -71,6 +74,35 @@ encoded decode). Unknown alias that does not decode => `deny unknown_recipient`.
 If the resolved pubkey has an account that is `active = false` or
 `mail_enabled = false` => `deny unknown_recipient`. Missing account = allowed.
 
+## Alias claim (`/aliases/claim`)
+
+Lets a user claim a provisioned alias themselves (the admin UI is no longer the
+only way to create one). The client signs a Nostr event and POSTs it as the body
+(the signed event *is* the authentication, there is no decision token):
+
+- `kind` = `ALIAS_CLAIM_KIND` (`27240`, app-specific).
+- tag `["address", "alice@example.com"]` = the requested alias.
+- tag `["visibility", "public"|"private"]` (optional, default `public`).
+- `created_at` within ±300 s of the server clock (replay bound).
+- `sig`/`id` valid (verified with `nostr-tools`).
+
+Server checks, in order: valid event/signature, fresh `created_at`, parsable
+address, local part length **6-47** (the 47 cap also keeps aliases clear of the
+48-52 char base36-encoded range, so no pubkey-encoded address can be claimed as
+an alias), domain is managed, the alias is free (or already owned by the same
+pubkey => idempotent), the account is `active`, the domain is in the plan's
+`allowed_domains` (empty = all managed domains), and the pubkey's current
+non-encoded alias count is `< plan.max_aliases`. On success it inserts the
+`identities` row (auto-creating the account) and returns the alias. Errors:
+`invalid_event`, `invalid_signature`, `stale_event`, `invalid_address`,
+`invalid_local_part`, `domain_not_managed`, `alias_taken`, `account_disabled`,
+`domain_not_allowed`, `alias_limit_reached`.
+
+Unlike outbound sending (where existing aliases are grandfathered past the plan's
+`allowed_domains`), **claiming** a *new* alias is gated by `allowed_domains`: the
+plan that creates the address must be allowed on its domain. An already-owned
+alias still returns idempotently regardless of the current plan.
+
 ## NIP-05 (`/.well-known/nostr.json`)
 
 `name` -> public identity (alias) -> pubkey, then `relays` come from the
@@ -84,3 +116,5 @@ If the resolved pubkey has an account that is `active = false` or
   from `identities` and adds the FK `identities.pubkey -> accounts.pubkey`.
 - `005` creates the `domains` table (managed from /admin), replacing the
   `PROTECTED_EMAIL_DOMAINS` environment variable.
+- `006` adds `plans.max_aliases` (free = 2, premium = 10) and an index on
+  `identities (pubkey)` to count a pubkey's aliases.

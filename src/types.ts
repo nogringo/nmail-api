@@ -53,6 +53,7 @@ export interface IdentityInput {
 export interface IdentityRepository {
   findIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
   findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
+  listIdentitiesByPubkey(pubkey: string): Promise<UserIdentity[]>
   listIdentities?(search?: string): Promise<AdminIdentity[]>
   createIdentity?(identity: IdentityInput): Promise<AdminIdentity>
   updateIdentity?(id: string, identity: IdentityInput): Promise<AdminIdentity | null>
@@ -80,6 +81,7 @@ export interface PlanLimits {
   perDay: number
   maxMessageBytes: number
   maxRecipients: number
+  maxAliases: number
   allowedDomains: string[]
 }
 

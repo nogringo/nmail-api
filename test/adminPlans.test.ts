@@ -37,18 +37,19 @@ test('Admin creates and updates a plan', async () => {
     method: 'PUT',
     url: '/admin/api/plans/business',
     headers: { cookie },
-    payload: { perMinute: 20, perHour: 200, perDay: 1000, maxMessageBytes: 50 * 1024 * 1024, maxRecipients: 25, isDefault: false },
+    payload: { perMinute: 20, perHour: 200, perDay: 1000, maxMessageBytes: 50 * 1024 * 1024, maxRecipients: 25, maxAliases: 20, isDefault: false },
   })
 
   assert.equal(created.statusCode, 200)
   assert.equal(created.json().plan.name, 'business')
   assert.equal(created.json().plan.maxRecipients, 25)
+  assert.equal(created.json().plan.maxAliases, 20)
 
   const updated = await app.inject({
     method: 'PUT',
     url: '/admin/api/plans/business',
     headers: { cookie },
-    payload: { perMinute: 30, perHour: 200, perDay: 1000, maxMessageBytes: 50 * 1024 * 1024, maxRecipients: 25, isDefault: false },
+    payload: { perMinute: 30, perHour: 200, perDay: 1000, maxMessageBytes: 50 * 1024 * 1024, maxRecipients: 25, maxAliases: 20, isDefault: false },
   })
   assert.equal(updated.json().plan.perMinute, 30)
 
@@ -64,7 +65,7 @@ test('Admin moving the default flag leaves only one default plan', async () => {
     method: 'PUT',
     url: '/admin/api/plans/premium',
     headers: { cookie },
-    payload: { perMinute: 10, perHour: 100, perDay: 500, maxMessageBytes: 26214400, maxRecipients: 10, isDefault: true },
+    payload: { perMinute: 10, perHour: 100, perDay: 500, maxMessageBytes: 26214400, maxRecipients: 10, maxAliases: 10, isDefault: true },
   })
 
   const plans = (await app.inject({ method: 'GET', url: '/admin/api/plans', headers: { cookie } })).json().plans
