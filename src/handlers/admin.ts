@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { normalizeDomain, normalizeLocalPart } from '../email.js'
-import type { IdentityInput, IdentityRepository, IdentityVisibility } from '../types.js'
+import { normalizePlanName, sanitizePlanLimits } from '../policy.js'
+import type { IdentityInput, IdentityRepository, IdentityVisibility, PolicyRepository } from '../types.js'
 
 const cookieName = 'nmail_admin_session'
 const sessionMaxAgeSeconds = 60 * 60 * 12
@@ -9,6 +10,14 @@ const duplicateConstraint = 'identities_unique_name'
 
 interface IdentityParams {
   id: string
+}
+
+interface PlanParams {
+  name: string
+}
+
+interface PubkeyParams {
+  pubkey: string
 }
 
 interface IdentityQuery {
@@ -19,7 +28,11 @@ interface LoginBody {
   password?: string
 }
 
-export function registerAdminRoutes(app: FastifyInstance, repo: IdentityRepository, adminPassword: string): void {
+export function registerAdminRoutes(
+  app: FastifyInstance,
+  repo: IdentityRepository & PolicyRepository,
+  adminPassword: string,
+): void {
   const auth = (request: FastifyRequest, reply: FastifyReply, done: (error?: Error) => void) => {
     if (!isAuthenticated(request, adminPassword)) {
       reply.code(401).send({ error: 'unauthorized' })
@@ -101,6 +114,69 @@ export function registerAdminRoutes(app: FastifyInstance, repo: IdentityReposito
 
     const deleted = await repo.deleteIdentity(request.params.id)
     if (!deleted) return reply.code(404).send({ error: 'identity_not_found' })
+
+    return reply.code(204).send()
+  })
+
+  app.get('/admin/api/plans', { preHandler: auth }, async (_request, reply) => {
+    if (!repo.listPlans) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const plans = await repo.listPlans()
+    return reply.send({ plans })
+  })
+
+  app.put('/admin/api/plans/:name', { preHandler: auth }, async (request: FastifyRequest<{ Params: PlanParams }>, reply) => {
+    if (!repo.upsertPlan) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const name = normalizePlanName(request.params.name)
+    if (!name) return reply.code(400).send({ error: 'invalid_plan', message: 'Plan name must use letters, digits, hyphens or underscores' })
+
+    const body = (request.body ?? {}) as Record<string, unknown>
+    const limits = sanitizePlanLimits(body)
+    if (!limits) return reply.code(400).send({ error: 'invalid_plan', message: 'Plan limits must be non-negative integers' })
+
+    const isDefault = body.isDefault === true
+    const plan = await repo.upsertPlan(name, limits, isDefault)
+    return reply.send({ plan })
+  })
+
+  app.delete('/admin/api/plans/:name', { preHandler: auth }, async (request: FastifyRequest<{ Params: PlanParams }>, reply) => {
+    if (!repo.deletePlan) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const deleted = await repo.deletePlan(normalizePlanName(request.params.name))
+    if (!deleted) return reply.code(409).send({ error: 'plan_not_deletable', message: 'Unknown plan or the default plan cannot be deleted' })
+
+    return reply.code(204).send()
+  })
+
+  app.get('/admin/api/pubkey-plans', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: IdentityQuery }>, reply) => {
+    if (!repo.listPubkeyPlans) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const assignments = await repo.listPubkeyPlans(request.query.search)
+    return reply.send({ assignments })
+  })
+
+  app.put('/admin/api/pubkey-plans/:pubkey', { preHandler: auth }, async (request: FastifyRequest<{ Params: PubkeyParams }>, reply) => {
+    if (!repo.setPubkeyPlan || !repo.listPlans) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const pubkey = String(request.params.pubkey ?? '').trim().toLowerCase()
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) return reply.code(400).send({ error: 'invalid_pubkey', message: 'Pubkey must be 64 lowercase hexadecimal characters' })
+
+    const planName = normalizePlanName((request.body as Record<string, unknown> | undefined)?.plan)
+    const plans = await repo.listPlans()
+    if (!plans.some((plan) => plan.name === planName)) {
+      return reply.code(400).send({ error: 'unknown_plan', message: 'The selected plan does not exist' })
+    }
+
+    const assignment = await repo.setPubkeyPlan(pubkey, planName)
+    return reply.send({ assignment })
+  })
+
+  app.delete('/admin/api/pubkey-plans/:pubkey', { preHandler: auth }, async (request: FastifyRequest<{ Params: PubkeyParams }>, reply) => {
+    if (!repo.clearPubkeyPlan) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const cleared = await repo.clearPubkeyPlan(String(request.params.pubkey ?? '').trim().toLowerCase())
+    if (!cleared) return reply.code(404).send({ error: 'assignment_not_found' })
 
     return reply.code(204).send()
   })
@@ -532,6 +608,35 @@ const adminPage = String.raw`<!doctype html>
 
     .hidden { display: none; }
 
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tab {
+      background: transparent;
+      color: var(--muted);
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 8px 4px;
+      font-weight: 600;
+    }
+
+    .tab:hover { background: transparent; color: var(--text); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    .view { display: block; }
+    .view.hidden { display: none; }
+
+    .hint {
+      margin: 0 16px 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
     @media (max-width: 900px) {
       .layout { grid-template-columns: 1fr; }
       .toolbar { align-items: stretch; flex-direction: column; }
@@ -571,66 +676,173 @@ const adminPage = String.raw`<!doctype html>
     </header>
 
     <main>
-      <div class="toolbar">
-        <input id="search" class="search" type="search" placeholder="Search domain, user, pubkey">
-        <button id="new-identity" type="button">New identity</button>
-      </div>
+      <nav class="tabs">
+        <button class="tab active" type="button" data-tab="identities">Identities</button>
+        <button class="tab" type="button" data-tab="plans">Plans</button>
+        <button class="tab" type="button" data-tab="pubkey-plans">Pubkey plans</button>
+      </nav>
 
-      <div class="layout">
-        <section class="panel">
-          <div class="panel-head">
-            <h2>Identities</h2>
-            <span id="count" class="badge">0</span>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Address</th>
-                <th>Pubkey</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="rows"></tbody>
-          </table>
-        </section>
+      <section id="view-identities" class="view">
+        <div class="toolbar">
+          <input id="search" class="search" type="search" placeholder="Search domain, user, pubkey">
+          <button id="new-identity" type="button">New identity</button>
+        </div>
 
-        <aside class="panel">
-          <div class="panel-head">
-            <h2 id="form-title">New identity</h2>
-            <button id="reset-form" class="ghost" type="button">Reset</button>
-          </div>
-          <form id="identity-form" class="form">
-            <input id="identity-id" type="hidden">
-            <div class="form-grid">
-              <label>Domain
-                <input id="domain" required placeholder="nmail.li">
-              </label>
-              <label>User
-                <input id="localPart" required placeholder="alice">
-              </label>
+        <div class="layout">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Identities</h2>
+              <span id="count" class="badge">0</span>
             </div>
-            <label>Pubkey
-              <input id="pubkey" class="mono" required maxlength="64" minlength="64">
-            </label>
-            <label>Relays
-              <textarea id="relays" class="mono" placeholder="wss://relay.nmail.li"></textarea>
-            </label>
-            <label>Visibility
-              <select id="visibility">
-                <option value="public">public</option>
-                <option value="private">private</option>
-              </select>
-            </label>
-            <div class="checks">
-              <label class="check"><input id="mailEnabled" type="checkbox" checked> Mail enabled</label>
-              <label class="check"><input id="active" type="checkbox" checked> Active</label>
+            <table>
+              <thead>
+                <tr>
+                  <th>Address</th>
+                  <th>Pubkey</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </section>
+
+          <aside class="panel">
+            <div class="panel-head">
+              <h2 id="form-title">New identity</h2>
+              <button id="reset-form" class="ghost" type="button">Reset</button>
             </div>
-            <p id="form-message" class="message"></p>
-            <button type="submit">Save</button>
-          </form>
-        </aside>
-      </div>
+            <form id="identity-form" class="form">
+              <input id="identity-id" type="hidden">
+              <div class="form-grid">
+                <label>Domain
+                  <input id="domain" required placeholder="nmail.li">
+                </label>
+                <label>User
+                  <input id="localPart" required placeholder="alice">
+                </label>
+              </div>
+              <label>Pubkey
+                <input id="pubkey" class="mono" required maxlength="64" minlength="64">
+              </label>
+              <label>Relays
+                <textarea id="relays" class="mono" placeholder="wss://relay.nmail.li"></textarea>
+              </label>
+              <label>Visibility
+                <select id="visibility">
+                  <option value="public">public</option>
+                  <option value="private">private</option>
+                </select>
+              </label>
+              <div class="checks">
+                <label class="check"><input id="mailEnabled" type="checkbox" checked> Mail enabled</label>
+                <label class="check"><input id="active" type="checkbox" checked> Active</label>
+              </div>
+              <p id="form-message" class="message"></p>
+              <button type="submit">Save</button>
+            </form>
+          </aside>
+        </div>
+      </section>
+
+      <section id="view-plans" class="view hidden">
+        <div class="layout">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Plans</h2>
+              <span id="plan-count" class="badge">0</span>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Plan</th>
+                  <th>Rate (min / hour / day)</th>
+                  <th>Max size</th>
+                  <th>Max rcpt</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="plan-rows"></tbody>
+            </table>
+          </section>
+
+          <aside class="panel">
+            <div class="panel-head">
+              <h2 id="plan-form-title">New plan</h2>
+              <button id="plan-reset" class="ghost" type="button">Reset</button>
+            </div>
+            <form id="plan-form" class="form">
+              <label>Name
+                <input id="plan-name" required placeholder="premium">
+              </label>
+              <div class="form-grid">
+                <label>Per minute
+                  <input id="plan-per-minute" type="number" min="0" required>
+                </label>
+                <label>Per hour
+                  <input id="plan-per-hour" type="number" min="0" required>
+                </label>
+              </div>
+              <div class="form-grid">
+                <label>Per day
+                  <input id="plan-per-day" type="number" min="0" required>
+                </label>
+                <label>Max recipients
+                  <input id="plan-max-recipients" type="number" min="0" required>
+                </label>
+              </div>
+              <label>Max message size (MB, .eml)
+                <input id="plan-max-mb" type="number" min="0" step="0.1" required>
+              </label>
+              <div class="checks">
+                <label class="check"><input id="plan-default" type="checkbox"> Default plan</label>
+              </div>
+              <p id="plan-message" class="message"></p>
+              <button type="submit">Save</button>
+            </form>
+          </aside>
+        </div>
+      </section>
+
+      <section id="view-pubkey-plans" class="view hidden">
+        <div class="layout">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Pubkey plans</h2>
+              <span id="assignment-count" class="badge">0</span>
+            </div>
+            <p class="hint">Pubkeys without an explicit plan fall back to the default plan.</p>
+            <input id="assignment-search" class="search" type="search" placeholder="Search pubkey or plan" style="margin: 0 16px 12px; width: calc(100% - 32px);">
+            <table>
+              <thead>
+                <tr>
+                  <th>Pubkey</th>
+                  <th>Plan</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="assignment-rows"></tbody>
+            </table>
+          </section>
+
+          <aside class="panel">
+            <div class="panel-head">
+              <h2>Assign plan</h2>
+              <button id="assignment-reset" class="ghost" type="button">Reset</button>
+            </div>
+            <form id="assignment-form" class="form">
+              <label>Pubkey
+                <input id="assignment-pubkey" class="mono" required maxlength="64" minlength="64">
+              </label>
+              <label>Plan
+                <select id="assignment-plan"></select>
+              </label>
+              <p id="assignment-message" class="message"></p>
+              <button type="submit">Save</button>
+            </form>
+          </aside>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -818,7 +1030,201 @@ const adminPage = String.raw`<!doctype html>
       searchTimer = setTimeout(() => loadIdentities().catch(() => {}), 180);
     });
 
+    // --- Plans ---
+    const MB = 1024 * 1024;
+    let plans = [];
+    let assignments = [];
+    let assignmentSearchTimer;
+    const planRows = document.querySelector('#plan-rows');
+    const planCount = document.querySelector('#plan-count');
+    const planForm = document.querySelector('#plan-form');
+    const planMessage = document.querySelector('#plan-message');
+    const planFormTitle = document.querySelector('#plan-form-title');
+
+    function formatBytes(bytes) {
+      return (Number(bytes) / MB).toFixed(1) + ' MB';
+    }
+
+    async function loadPlans() {
+      const data = await request('/admin/api/plans');
+      plans = data.plans;
+      planCount.textContent = String(plans.length);
+      planRows.innerHTML = plans.map(renderPlanRow).join('');
+      const select = document.querySelector('#assignment-plan');
+      select.innerHTML = plans.map((plan) => '<option value="' + escapeHtml(plan.name) + '">' + escapeHtml(plan.name) + (plan.isDefault ? ' (default)' : '') + '</option>').join('');
+    }
+
+    function renderPlanRow(plan) {
+      const name = escapeHtml(plan.name) + (plan.isDefault ? ' <span class="badge ok">default</span>' : '');
+      return '<tr>' +
+        '<td data-label="Plan"><strong>' + name + '</strong></td>' +
+        '<td data-label="Rate">' + plan.perMinute + ' / ' + plan.perHour + ' / ' + plan.perDay + '</td>' +
+        '<td data-label="Max size">' + formatBytes(plan.maxMessageBytes) + '</td>' +
+        '<td data-label="Max rcpt">' + plan.maxRecipients + '</td>' +
+        '<td data-label="Actions" class="actions"><div class="row-actions">' +
+          '<button class="secondary" type="button" data-plan-action="edit" data-name="' + escapeHtml(plan.name) + '">Edit</button>' +
+          (plan.isDefault ? '' : '<button class="danger" type="button" data-plan-action="delete" data-name="' + escapeHtml(plan.name) + '">Delete</button>') +
+        '</div></td>' +
+      '</tr>';
+    }
+
+    function fillPlanForm(plan) {
+      document.querySelector('#plan-name').value = plan.name || '';
+      document.querySelector('#plan-name').readOnly = Boolean(plan.name);
+      document.querySelector('#plan-per-minute').value = plan.perMinute ?? '';
+      document.querySelector('#plan-per-hour').value = plan.perHour ?? '';
+      document.querySelector('#plan-per-day').value = plan.perDay ?? '';
+      document.querySelector('#plan-max-recipients').value = plan.maxRecipients ?? '';
+      document.querySelector('#plan-max-mb').value = plan.maxMessageBytes != null ? (plan.maxMessageBytes / MB) : '';
+      document.querySelector('#plan-default').checked = Boolean(plan.isDefault);
+      planFormTitle.textContent = plan.name ? 'Edit plan' : 'New plan';
+      setMessage(planMessage, '', '');
+    }
+
+    function resetPlanForm() {
+      fillPlanForm({});
+    }
+
+    planForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const name = document.querySelector('#plan-name').value.trim();
+      const body = {
+        perMinute: Number(document.querySelector('#plan-per-minute').value),
+        perHour: Number(document.querySelector('#plan-per-hour').value),
+        perDay: Number(document.querySelector('#plan-per-day').value),
+        maxRecipients: Number(document.querySelector('#plan-max-recipients').value),
+        maxMessageBytes: Math.round(Number(document.querySelector('#plan-max-mb').value) * MB),
+        isDefault: document.querySelector('#plan-default').checked,
+      };
+      try {
+        await request('/admin/api/plans/' + encodeURIComponent(name), { method: 'PUT', body: JSON.stringify(body) });
+        setMessage(planMessage, 'Saved', 'ok');
+        resetPlanForm();
+        await loadPlans();
+      } catch (error) {
+        setMessage(planMessage, error.message, 'error');
+      }
+    });
+
+    planRows.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-plan-action]');
+      if (!button) return;
+      const plan = plans.find((item) => item.name === button.dataset.name);
+      if (!plan) return;
+
+      if (button.dataset.planAction === 'edit') {
+        fillPlanForm(plan);
+        return;
+      }
+      try {
+        if (!confirm('Delete plan ' + plan.name + '?')) return;
+        await request('/admin/api/plans/' + encodeURIComponent(plan.name), { method: 'DELETE' });
+        await loadPlans();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.querySelector('#plan-reset').addEventListener('click', resetPlanForm);
+
+    // --- Pubkey plans ---
+    const assignmentRows = document.querySelector('#assignment-rows');
+    const assignmentCount = document.querySelector('#assignment-count');
+    const assignmentForm = document.querySelector('#assignment-form');
+    const assignmentMessage = document.querySelector('#assignment-message');
+    const assignmentSearch = document.querySelector('#assignment-search');
+
+    async function loadAssignments() {
+      const query = assignmentSearch.value.trim();
+      const data = await request('/admin/api/pubkey-plans' + (query ? '?search=' + encodeURIComponent(query) : ''));
+      assignments = data.assignments;
+      assignmentCount.textContent = String(assignments.length);
+      assignmentRows.innerHTML = assignments.map(renderAssignmentRow).join('');
+    }
+
+    function renderAssignmentRow(assignment) {
+      return '<tr>' +
+        '<td data-label="Pubkey" class="mono">' + escapeHtml(assignment.pubkey) + '</td>' +
+        '<td data-label="Plan"><span class="badge">' + escapeHtml(assignment.plan) + '</span></td>' +
+        '<td data-label="Actions" class="actions"><div class="row-actions">' +
+          '<button class="secondary" type="button" data-assignment-action="edit" data-pubkey="' + escapeHtml(assignment.pubkey) + '">Edit</button>' +
+          '<button class="danger" type="button" data-assignment-action="delete" data-pubkey="' + escapeHtml(assignment.pubkey) + '">Remove</button>' +
+        '</div></td>' +
+      '</tr>';
+    }
+
+    function resetAssignmentForm() {
+      document.querySelector('#assignment-pubkey').value = '';
+      document.querySelector('#assignment-pubkey').readOnly = false;
+      if (plans[0]) document.querySelector('#assignment-plan').value = plans[0].name;
+      setMessage(assignmentMessage, '', '');
+    }
+
+    assignmentForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const pubkey = document.querySelector('#assignment-pubkey').value.trim();
+      try {
+        await request('/admin/api/pubkey-plans/' + encodeURIComponent(pubkey), {
+          method: 'PUT',
+          body: JSON.stringify({ plan: document.querySelector('#assignment-plan').value }),
+        });
+        setMessage(assignmentMessage, 'Saved', 'ok');
+        resetAssignmentForm();
+        await loadAssignments();
+      } catch (error) {
+        setMessage(assignmentMessage, error.message, 'error');
+      }
+    });
+
+    assignmentRows.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-assignment-action]');
+      if (!button) return;
+      const assignment = assignments.find((item) => item.pubkey === button.dataset.pubkey);
+      if (!assignment) return;
+
+      if (button.dataset.assignmentAction === 'edit') {
+        document.querySelector('#assignment-pubkey').value = assignment.pubkey;
+        document.querySelector('#assignment-pubkey').readOnly = true;
+        document.querySelector('#assignment-plan').value = assignment.plan;
+        return;
+      }
+      try {
+        if (!confirm('Remove plan assignment for this pubkey?')) return;
+        await request('/admin/api/pubkey-plans/' + encodeURIComponent(assignment.pubkey), { method: 'DELETE' });
+        await loadAssignments();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.querySelector('#assignment-reset').addEventListener('click', resetAssignmentForm);
+    assignmentSearch.addEventListener('input', () => {
+      clearTimeout(assignmentSearchTimer);
+      assignmentSearchTimer = setTimeout(() => loadAssignments().catch(() => {}), 180);
+    });
+
+    // --- Tabs ---
+    let plansLoaded = false;
+    document.querySelectorAll('.tab').forEach((tab) => {
+      tab.addEventListener('click', async () => {
+        document.querySelectorAll('.tab').forEach((item) => item.classList.toggle('active', item === tab));
+        const target = tab.dataset.tab;
+        document.querySelectorAll('.view').forEach((view) => view.classList.toggle('hidden', view.id !== 'view-' + target));
+        try {
+          if (target === 'plans') await loadPlans();
+          if (target === 'pubkey-plans') {
+            if (!plansLoaded) { await loadPlans(); plansLoaded = true; }
+            resetAssignmentForm();
+            await loadAssignments();
+          }
+        } catch (error) {
+          // surfaced by individual loaders
+        }
+      });
+    });
+
     resetForm();
+    resetPlanForm();
     loadIdentities().then(showApp).catch(showLogin);
   </script>
 </body>

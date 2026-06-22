@@ -1,7 +1,27 @@
-import type { AdminIdentity, IdentityInput, IdentityRepository, UserIdentity } from '../src/types.js'
+import { DEFAULT_PLANS, FREE_PLAN } from '../src/policy.js'
+import type {
+  AdminIdentity,
+  IdentityInput,
+  IdentityRepository,
+  OutboundSendCounts,
+  Plan,
+  PlanLimits,
+  PolicyRepository,
+  PubkeyPlan,
+  UserIdentity,
+} from '../src/types.js'
 
-export class MemoryIdentityRepository implements IdentityRepository {
+interface SendEntry {
+  pubkey: string
+  giftWrapId?: string
+  at: number
+}
+
+export class MemoryIdentityRepository implements IdentityRepository, PolicyRepository {
   readonly identities = new Map<string, AdminIdentity>()
+  readonly plans = new Map<string, Plan>(DEFAULT_PLANS.map((plan) => [plan.name, { ...plan }]))
+  readonly pubkeyPlans = new Map<string, PubkeyPlan>()
+  readonly sends: SendEntry[] = []
   fail = false
   private nextId = 1
 
@@ -108,6 +128,91 @@ export class MemoryIdentityRepository implements IdentityRepository {
 
     this.identities.delete(key(current.domain, current.localPart))
     return true
+  }
+
+  async getPlanForPubkey(pubkey: string): Promise<Plan> {
+    if (this.fail) throw new Error('database unavailable')
+
+    const assigned = this.pubkeyPlans.get(pubkey)
+    if (assigned) {
+      const plan = this.plans.get(assigned.plan)
+      if (plan) return { ...plan }
+    }
+
+    const fallback = [...this.plans.values()].find((plan) => plan.isDefault)
+    return fallback ? { ...fallback } : { ...FREE_PLAN }
+  }
+
+  async countOutboundSends(pubkey: string): Promise<OutboundSendCounts> {
+    if (this.fail) throw new Error('database unavailable')
+
+    const now = Date.now()
+    const within = (windowMs: number) =>
+      this.sends.filter((entry) => entry.pubkey === pubkey && now - entry.at < windowMs).length
+
+    return {
+      minute: within(60 * 1000),
+      hour: within(60 * 60 * 1000),
+      day: within(24 * 60 * 60 * 1000),
+    }
+  }
+
+  async recordOutboundSend(pubkey: string, giftWrapId?: string): Promise<void> {
+    if (this.fail) throw new Error('database unavailable')
+
+    if (giftWrapId && this.sends.some((entry) => entry.giftWrapId === giftWrapId)) return
+    this.sends.push({ pubkey, giftWrapId, at: Date.now() })
+  }
+
+  async hasOutboundSend(giftWrapId: string): Promise<boolean> {
+    if (this.fail) throw new Error('database unavailable')
+
+    return this.sends.some((entry) => entry.giftWrapId === giftWrapId)
+  }
+
+  async listPlans(): Promise<Plan[]> {
+    return [...this.plans.values()]
+      .map((plan) => ({ ...plan }))
+      .sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || left.name.localeCompare(right.name))
+  }
+
+  async upsertPlan(name: string, limits: PlanLimits, isDefault: boolean): Promise<Plan> {
+    if (isDefault) {
+      for (const [planName, plan] of this.plans) {
+        if (planName !== name && plan.isDefault) this.plans.set(planName, { ...plan, isDefault: false })
+      }
+    }
+
+    const plan: Plan = { name, ...limits, isDefault }
+    this.plans.set(name, plan)
+    return { ...plan }
+  }
+
+  async deletePlan(name: string): Promise<boolean> {
+    const plan = this.plans.get(name)
+    if (!plan || plan.isDefault) return false
+    return this.plans.delete(name)
+  }
+
+  async getPubkeyPlan(pubkey: string): Promise<string | null> {
+    return this.pubkeyPlans.get(pubkey)?.plan ?? null
+  }
+
+  async setPubkeyPlan(pubkey: string, planName: string): Promise<PubkeyPlan | null> {
+    const entry: PubkeyPlan = { pubkey, plan: planName, updatedAt: new Date().toISOString() }
+    this.pubkeyPlans.set(pubkey, entry)
+    return { ...entry }
+  }
+
+  async clearPubkeyPlan(pubkey: string): Promise<boolean> {
+    return this.pubkeyPlans.delete(pubkey)
+  }
+
+  async listPubkeyPlans(search = ''): Promise<PubkeyPlan[]> {
+    const normalizedSearch = search.trim().toLowerCase()
+    return [...this.pubkeyPlans.values()]
+      .filter((entry) => !normalizedSearch || entry.pubkey.includes(normalizedSearch) || entry.plan.includes(normalizedSearch))
+      .map((entry) => ({ ...entry }))
   }
 
   private findById(id: string): AdminIdentity | null {

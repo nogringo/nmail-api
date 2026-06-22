@@ -14,6 +14,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databaseUrl,
     protectedEmailDomains: parseProtectedDomains(env.PROTECTED_EMAIL_DOMAINS),
     inboundDecisionToken,
+    outboundDecisionToken: parseOptionalSecret(env.OUTBOUND_DECISION_TOKEN),
+    outboundMaxBodyBytes: parseOutboundMaxBodyBytes(env.OUTBOUND_MAX_BODY_BYTES),
     adminPassword: parseOptionalSecret(env.ADMIN_PASSWORD),
   }
 }
@@ -38,6 +40,18 @@ export function parseProtectedDomains(value: string | undefined): Set<string> {
   }
 
   return new Set(domains)
+}
+
+function parseOutboundMaxBodyBytes(value: string | undefined): number {
+  const defaultBytes = 32 * 1024 * 1024
+  if (!value) return defaultBytes
+
+  const bytes = Number(value)
+  if (!Number.isInteger(bytes) || bytes <= 0) {
+    throw new Error('OUTBOUND_MAX_BODY_BYTES must be a positive integer')
+  }
+
+  return bytes
 }
 
 function parseRequiredSecret(value: string | undefined, name: string): string {

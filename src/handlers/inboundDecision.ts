@@ -9,7 +9,7 @@ export function createInboundDecisionHandler(
   config: Pick<AppConfig, 'protectedEmailDomains' | 'inboundDecisionToken'>,
 ) {
   return async function inboundDecisionHandler(request: FastifyRequest, reply: FastifyReply) {
-    if (!isAuthorizedDecisionRequest(request, config.inboundDecisionToken)) {
+    if (!isAuthorizedDecisionRequest(request, config.inboundDecisionToken, 'x-inbound-decision-token')) {
       return reply.code(401).send({ error: 'unauthorized' })
     }
 
@@ -28,8 +28,12 @@ export function createInboundDecisionHandler(
   }
 }
 
-export function isAuthorizedDecisionRequest(request: FastifyRequest, expectedToken: string): boolean {
-  const token = extractDecisionToken(request)
+export function isAuthorizedDecisionRequest(
+  request: FastifyRequest,
+  expectedToken: string,
+  headerName: string,
+): boolean {
+  const token = extractDecisionToken(request, headerName)
   if (!token) return false
 
   const actual = Buffer.from(token)
@@ -68,7 +72,7 @@ export async function decideDelivery(
   return { decision: 'allow' }
 }
 
-async function resolveRecipientPubkey(
+export async function resolveRecipientPubkey(
   domain: string,
   localPart: string,
   repo: IdentityRepository,
@@ -94,8 +98,8 @@ function parseDecisionPayload(value: unknown): InboundDecisionPayload | null {
   return payload as InboundDecisionPayload
 }
 
-function extractDecisionToken(request: FastifyRequest): string {
-  const headerToken = firstHeaderValue(request.headers['x-inbound-decision-token'])
+function extractDecisionToken(request: FastifyRequest, headerName: string): string {
+  const headerToken = firstHeaderValue(request.headers[headerName])
   if (headerToken) return headerToken
 
   const authorization = firstHeaderValue(request.headers.authorization)
