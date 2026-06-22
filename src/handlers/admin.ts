@@ -2,7 +2,17 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { normalizeDomain, normalizeLocalPart } from '../email.js'
 import { normalizePlanName, sanitizePlanLimits } from '../policy.js'
-import type { IdentityInput, IdentityRepository, IdentityVisibility, PolicyRepository } from '../types.js'
+import type {
+  AccountInput,
+  AccountRepository,
+  DomainRepository,
+  IdentityInput,
+  IdentityRepository,
+  IdentityVisibility,
+  PolicyRepository,
+} from '../types.js'
+
+type AdminRepository = IdentityRepository & AccountRepository & PolicyRepository & DomainRepository
 
 const cookieName = 'nmail_admin_session'
 const sessionMaxAgeSeconds = 60 * 60 * 12
@@ -20,6 +30,10 @@ interface PubkeyParams {
   pubkey: string
 }
 
+interface DomainParams {
+  domain: string
+}
+
 interface IdentityQuery {
   search?: string
 }
@@ -28,11 +42,7 @@ interface LoginBody {
   password?: string
 }
 
-export function registerAdminRoutes(
-  app: FastifyInstance,
-  repo: IdentityRepository & PolicyRepository,
-  adminPassword: string,
-): void {
+export function registerAdminRoutes(app: FastifyInstance, repo: AdminRepository, adminPassword: string): void {
   const auth = (request: FastifyRequest, reply: FastifyReply, done: (error?: Error) => void) => {
     if (!isAuthenticated(request, adminPassword)) {
       reply.code(401).send({ error: 'unauthorized' })
@@ -97,18 +107,6 @@ export function registerAdminRoutes(
     }
   })
 
-  app.post(
-    '/admin/api/identities/:id/deactivate',
-    { preHandler: auth },
-    async (request: FastifyRequest<{ Params: IdentityParams }>, reply) => setIdentityActive(repo, request.params.id, false, reply),
-  )
-
-  app.post(
-    '/admin/api/identities/:id/activate',
-    { preHandler: auth },
-    async (request: FastifyRequest<{ Params: IdentityParams }>, reply) => setIdentityActive(repo, request.params.id, true, reply),
-  )
-
   app.delete('/admin/api/identities/:id', { preHandler: auth }, async (request: FastifyRequest<{ Params: IdentityParams }>, reply) => {
     if (!repo.deleteIdentity) return reply.code(501).send({ error: 'admin_repository_unavailable' })
 
@@ -122,7 +120,8 @@ export function registerAdminRoutes(
     if (!repo.listPlans) return reply.code(501).send({ error: 'admin_repository_unavailable' })
 
     const plans = await repo.listPlans()
-    return reply.send({ plans })
+    const domains = await repo.listDomains()
+    return reply.send({ plans, domains })
   })
 
   app.put('/admin/api/plans/:name', { preHandler: auth }, async (request: FastifyRequest<{ Params: PlanParams }>, reply) => {
@@ -149,46 +148,67 @@ export function registerAdminRoutes(
     return reply.code(204).send()
   })
 
-  app.get('/admin/api/pubkey-plans', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: IdentityQuery }>, reply) => {
-    if (!repo.listPubkeyPlans) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+  app.get('/admin/api/accounts', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: IdentityQuery }>, reply) => {
+    if (!repo.listAccounts) return reply.code(501).send({ error: 'admin_repository_unavailable' })
 
-    const assignments = await repo.listPubkeyPlans(request.query.search)
-    return reply.send({ assignments })
+    const accounts = await repo.listAccounts(request.query.search)
+    return reply.send({ accounts })
   })
 
-  app.put('/admin/api/pubkey-plans/:pubkey', { preHandler: auth }, async (request: FastifyRequest<{ Params: PubkeyParams }>, reply) => {
-    if (!repo.setPubkeyPlan || !repo.listPlans) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+  app.put('/admin/api/accounts/:pubkey', { preHandler: auth }, async (request: FastifyRequest<{ Params: PubkeyParams }>, reply) => {
+    if (!repo.upsertAccount || !repo.listPlans) return reply.code(501).send({ error: 'admin_repository_unavailable' })
 
     const pubkey = String(request.params.pubkey ?? '').trim().toLowerCase()
-    if (!/^[0-9a-f]{64}$/.test(pubkey)) return reply.code(400).send({ error: 'invalid_pubkey', message: 'Pubkey must be 64 lowercase hexadecimal characters' })
-
-    const planName = normalizePlanName((request.body as Record<string, unknown> | undefined)?.plan)
-    const plans = await repo.listPlans()
-    if (!plans.some((plan) => plan.name === planName)) {
-      return reply.code(400).send({ error: 'unknown_plan', message: 'The selected plan does not exist' })
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) {
+      return reply.code(400).send({ error: 'invalid_pubkey', message: 'Pubkey must be 64 lowercase hexadecimal characters' })
     }
 
-    const assignment = await repo.setPubkeyPlan(pubkey, planName)
-    return reply.send({ assignment })
+    const parsed = parseAccountInput(request.body)
+    if (!parsed.ok) return reply.code(400).send({ error: 'invalid_account', message: parsed.message })
+
+    if (parsed.account.plan !== null) {
+      const plans = await repo.listPlans()
+      if (!plans.some((plan) => plan.name === parsed.account.plan)) {
+        return reply.code(400).send({ error: 'unknown_plan', message: 'The selected plan does not exist' })
+      }
+    }
+
+    const account = await repo.upsertAccount(pubkey, parsed.account)
+    return reply.send({ account })
   })
 
-  app.delete('/admin/api/pubkey-plans/:pubkey', { preHandler: auth }, async (request: FastifyRequest<{ Params: PubkeyParams }>, reply) => {
-    if (!repo.clearPubkeyPlan) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+  app.delete('/admin/api/accounts/:pubkey', { preHandler: auth }, async (request: FastifyRequest<{ Params: PubkeyParams }>, reply) => {
+    if (!repo.deleteAccount) return reply.code(501).send({ error: 'admin_repository_unavailable' })
 
-    const cleared = await repo.clearPubkeyPlan(String(request.params.pubkey ?? '').trim().toLowerCase())
-    if (!cleared) return reply.code(404).send({ error: 'assignment_not_found' })
+    const deleted = await repo.deleteAccount(String(request.params.pubkey ?? '').trim().toLowerCase())
+    if (!deleted) return reply.code(404).send({ error: 'account_not_found' })
 
     return reply.code(204).send()
   })
-}
 
-async function setIdentityActive(repo: IdentityRepository, id: string, active: boolean, reply: FastifyReply) {
-  if (!repo.setIdentityActive) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+  app.get('/admin/api/domains', { preHandler: auth }, async (_request, reply) => {
+    const domains = await repo.listDomains()
+    return reply.send({ domains })
+  })
 
-  const identity = await repo.setIdentityActive(id, active)
-  if (!identity) return reply.code(404).send({ error: 'identity_not_found' })
+  app.post('/admin/api/domains', { preHandler: auth }, async (request, reply) => {
+    if (!repo.addDomain) return reply.code(501).send({ error: 'admin_repository_unavailable' })
 
-  return reply.send({ identity })
+    const domain = normalizeDomain(String((request.body as { domain?: unknown } | undefined)?.domain ?? ''))
+    if (!domain) return reply.code(400).send({ error: 'invalid_domain', message: 'A valid domain is required' })
+
+    await repo.addDomain(domain)
+    return reply.code(201).send({ domain })
+  })
+
+  app.delete('/admin/api/domains/:domain', { preHandler: auth }, async (request: FastifyRequest<{ Params: DomainParams }>, reply) => {
+    if (!repo.deleteDomain) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const deleted = await repo.deleteDomain(normalizeDomain(request.params.domain))
+    if (!deleted) return reply.code(404).send({ error: 'domain_not_found' })
+
+    return reply.code(204).send()
+  })
 }
 
 type ParsedIdentityInput = { ok: true; identity: IdentityInput } | { ok: false; message: string }
@@ -201,17 +221,11 @@ function parseIdentityInput(value: unknown): ParsedIdentityInput {
   const localPart = normalizeLocalPart(String(input.localPart ?? ''))
   const pubkey = String(input.pubkey ?? '').trim().toLowerCase()
   const visibility = input.visibility
-  const mailEnabled = input.mailEnabled
-  const active = input.active
-  const relays = parseRelays(input.relays)
 
   if (!domain) return invalid('Domain is required')
   if (!localPart) return invalid('Local part is required')
   if (!/^[0-9a-f]{64}$/.test(pubkey)) return invalid('Pubkey must be 64 lowercase hexadecimal characters')
   if (visibility !== 'public' && visibility !== 'private') return invalid('Visibility must be public or private')
-  if (typeof mailEnabled !== 'boolean') return invalid('Mail enabled must be a boolean')
-  if (typeof active !== 'boolean') return invalid('Active must be a boolean')
-  if (!relays.ok) return invalid(relays.message)
 
   return {
     ok: true,
@@ -219,10 +233,34 @@ function parseIdentityInput(value: unknown): ParsedIdentityInput {
       domain,
       localPart,
       pubkey,
-      relays: relays.relays,
       visibility: visibility satisfies IdentityVisibility,
-      mailEnabled,
+    },
+  }
+}
+
+type ParsedAccountInput = { ok: true; account: AccountInput } | { ok: false; message: string }
+
+function parseAccountInput(value: unknown): ParsedAccountInput {
+  if (!value || typeof value !== 'object') return invalid('Account payload is required')
+
+  const input = value as Record<string, unknown>
+  const active = input.active
+  const mailEnabled = input.mailEnabled
+  const relays = parseRelays(input.relays)
+  const rawPlan = input.plan
+  const plan = rawPlan === null || rawPlan === undefined || rawPlan === '' ? null : normalizePlanName(rawPlan)
+
+  if (typeof active !== 'boolean') return invalid('Active must be a boolean')
+  if (typeof mailEnabled !== 'boolean') return invalid('Mail enabled must be a boolean')
+  if (!relays.ok) return invalid(relays.message)
+
+  return {
+    ok: true,
+    account: {
       active,
+      mailEnabled,
+      plan,
+      relays: relays.relays,
     },
   }
 }
@@ -261,7 +299,7 @@ function parseRelays(value: unknown): { ok: true; relays: string[] } | { ok: fal
   return { ok: true, relays: cleanRelays }
 }
 
-function invalid(message: string): ParsedIdentityInput {
+function invalid(message: string): { ok: false; message: string } {
   return { ok: false, message }
 }
 
@@ -678,8 +716,9 @@ const adminPage = String.raw`<!doctype html>
     <main>
       <nav class="tabs">
         <button class="tab active" type="button" data-tab="identities">Identities</button>
+        <button class="tab" type="button" data-tab="accounts">Accounts</button>
         <button class="tab" type="button" data-tab="plans">Plans</button>
-        <button class="tab" type="button" data-tab="pubkey-plans">Pubkey plans</button>
+        <button class="tab" type="button" data-tab="domains">Domains</button>
       </nav>
 
       <section id="view-identities" class="view">
@@ -699,7 +738,7 @@ const adminPage = String.raw`<!doctype html>
                 <tr>
                   <th>Address</th>
                   <th>Pubkey</th>
-                  <th>Status</th>
+                  <th>Visibility</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -716,7 +755,7 @@ const adminPage = String.raw`<!doctype html>
               <input id="identity-id" type="hidden">
               <div class="form-grid">
                 <label>Domain
-                  <input id="domain" required placeholder="nmail.li">
+                  <input id="domain" required placeholder="example.com">
                 </label>
                 <label>User
                   <input id="localPart" required placeholder="alice">
@@ -725,19 +764,13 @@ const adminPage = String.raw`<!doctype html>
               <label>Pubkey
                 <input id="pubkey" class="mono" required maxlength="64" minlength="64">
               </label>
-              <label>Relays
-                <textarea id="relays" class="mono" placeholder="wss://relay.nmail.li"></textarea>
-              </label>
               <label>Visibility
                 <select id="visibility">
                   <option value="public">public</option>
                   <option value="private">private</option>
                 </select>
               </label>
-              <div class="checks">
-                <label class="check"><input id="mailEnabled" type="checkbox" checked> Mail enabled</label>
-                <label class="check"><input id="active" type="checkbox" checked> Active</label>
-              </div>
+              <p class="hint" style="margin: 0">Mail, plan and relays are managed per account in the Accounts tab.</p>
               <p id="form-message" class="message"></p>
               <button type="submit">Save</button>
             </form>
@@ -759,6 +792,7 @@ const adminPage = String.raw`<!doctype html>
                   <th>Rate (min / hour / day)</th>
                   <th>Max size</th>
                   <th>Max rcpt</th>
+                  <th>Domains</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -794,6 +828,9 @@ const adminPage = String.raw`<!doctype html>
               <label>Max message size (MB, .eml)
                 <input id="plan-max-mb" type="number" min="0" step="0.1" required>
               </label>
+              <label>Allowed sending domains</label>
+              <div id="plan-domains" class="checks"></div>
+              <p class="hint" style="margin: 0">None checked = all managed domains.</p>
               <div class="checks">
                 <label class="check"><input id="plan-default" type="checkbox"> Default plan</label>
               </div>
@@ -804,44 +841,75 @@ const adminPage = String.raw`<!doctype html>
         </div>
       </section>
 
-      <section id="view-pubkey-plans" class="view hidden">
+      <section id="view-accounts" class="view hidden">
+        <div class="toolbar">
+          <input id="account-search" class="search" type="search" placeholder="Search pubkey or plan">
+          <button id="new-account" type="button">New account</button>
+        </div>
         <div class="layout">
           <section class="panel">
             <div class="panel-head">
-              <h2>Pubkey plans</h2>
-              <span id="assignment-count" class="badge">0</span>
+              <h2>Accounts</h2>
+              <span id="account-count" class="badge">0</span>
             </div>
-            <p class="hint">Pubkeys without an explicit plan fall back to the default plan.</p>
-            <input id="assignment-search" class="search" type="search" placeholder="Search pubkey or plan" style="margin: 0 16px 12px; width: calc(100% - 32px);">
+            <p class="hint">A pubkey with no row uses the open-service defaults: active, mail enabled, default plan.</p>
             <table>
               <thead>
                 <tr>
                   <th>Pubkey</th>
+                  <th>Status</th>
                   <th>Plan</th>
                   <th>Actions</th>
                 </tr>
               </thead>
-              <tbody id="assignment-rows"></tbody>
+              <tbody id="account-rows"></tbody>
             </table>
           </section>
 
           <aside class="panel">
             <div class="panel-head">
-              <h2>Assign plan</h2>
-              <button id="assignment-reset" class="ghost" type="button">Reset</button>
+              <h2 id="account-form-title">New account</h2>
+              <button id="account-reset" class="ghost" type="button">Reset</button>
             </div>
-            <form id="assignment-form" class="form">
+            <form id="account-form" class="form">
               <label>Pubkey
-                <input id="assignment-pubkey" class="mono" required maxlength="64" minlength="64">
+                <input id="account-pubkey" class="mono" required maxlength="64" minlength="64">
               </label>
               <label>Plan
-                <select id="assignment-plan"></select>
+                <select id="account-plan"></select>
               </label>
-              <p id="assignment-message" class="message"></p>
+              <label>Relays
+                <textarea id="account-relays" class="mono" placeholder="wss://relay.example.com"></textarea>
+              </label>
+              <div class="checks">
+                <label class="check"><input id="account-active" type="checkbox" checked> Active</label>
+                <label class="check"><input id="account-mail" type="checkbox" checked> Mail enabled</label>
+              </div>
+              <p id="account-message" class="message"></p>
               <button type="submit">Save</button>
             </form>
           </aside>
         </div>
+      </section>
+      <section id="view-domains" class="view hidden">
+        <div class="toolbar">
+          <form id="domain-form" style="display: flex; gap: 8px; width: 100%;">
+            <input id="domain-input" class="search" placeholder="example.com" required>
+            <button type="submit">Add domain</button>
+          </form>
+        </div>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Domains</h2>
+            <span id="domain-count" class="badge">0</span>
+          </div>
+          <p class="hint">Domains this service handles. Outbound senders must use one; inbound only checks recipients on these.</p>
+          <p id="domain-message" class="message"></p>
+          <table>
+            <thead><tr><th>Domain</th><th>Actions</th></tr></thead>
+            <tbody id="domain-rows"></tbody>
+          </table>
+        </section>
       </section>
     </main>
   </div>
@@ -901,18 +969,12 @@ const adminPage = String.raw`<!doctype html>
 
     function renderRow(identity) {
       const address = escapeHtml(identity.localPart + '@' + identity.domain);
-      const status = [
-        identity.active ? '<span class="badge ok">active</span>' : '<span class="badge off">inactive</span>',
-        identity.mailEnabled ? '<span class="badge ok">mail</span>' : '<span class="badge off">mail off</span>',
-        '<span class="badge">' + escapeHtml(identity.visibility) + '</span>',
-      ].join(' ');
       return '<tr>' +
         '<td data-label="Address"><strong>' + address + '</strong><br><span class="mono">#' + escapeHtml(identity.id) + '</span></td>' +
         '<td data-label="Pubkey" class="mono">' + escapeHtml(identity.pubkey) + '</td>' +
-        '<td data-label="Status">' + status + '</td>' +
+        '<td data-label="Visibility"><span class="badge">' + escapeHtml(identity.visibility) + '</span></td>' +
         '<td data-label="Actions" class="actions"><div class="row-actions">' +
           '<button class="secondary" type="button" data-action="edit" data-id="' + escapeHtml(identity.id) + '">Edit</button>' +
-          '<button class="secondary" type="button" data-action="' + (identity.active ? 'deactivate' : 'activate') + '" data-id="' + escapeHtml(identity.id) + '">' + (identity.active ? 'Deactivate' : 'Activate') + '</button>' +
           '<button class="danger" type="button" data-action="delete" data-id="' + escapeHtml(identity.id) + '">Delete</button>' +
         '</div></td>' +
       '</tr>';
@@ -923,10 +985,7 @@ const adminPage = String.raw`<!doctype html>
         domain: document.querySelector('#domain').value,
         localPart: document.querySelector('#localPart').value,
         pubkey: document.querySelector('#pubkey').value,
-        relays: document.querySelector('#relays').value.split(/\\r?\\n|,/).map((relay) => relay.trim()).filter(Boolean),
         visibility: document.querySelector('#visibility').value,
-        mailEnabled: document.querySelector('#mailEnabled').checked,
-        active: document.querySelector('#active').checked,
       };
     }
 
@@ -935,17 +994,14 @@ const adminPage = String.raw`<!doctype html>
       document.querySelector('#domain').value = identity.domain || '';
       document.querySelector('#localPart').value = identity.localPart || '';
       document.querySelector('#pubkey').value = identity.pubkey || '';
-      document.querySelector('#relays').value = (identity.relays || []).join('\\n');
       document.querySelector('#visibility').value = identity.visibility || 'public';
-      document.querySelector('#mailEnabled').checked = identity.mailEnabled !== false;
-      document.querySelector('#active').checked = identity.active !== false;
       formTitle.textContent = identity.id ? 'Edit identity' : 'New identity';
       formMessage.textContent = '';
       formMessage.className = 'message';
     }
 
     function resetForm() {
-      fillForm({ visibility: 'public', mailEnabled: true, active: true, relays: [] });
+      fillForm({ visibility: 'public' });
     }
 
     function setMessage(element, message, type) {
@@ -1007,12 +1063,8 @@ const adminPage = String.raw`<!doctype html>
       }
 
       try {
-        if (button.dataset.action === 'delete') {
-          if (!confirm('Permanently delete ' + identity.localPart + '@' + identity.domain + '?')) return;
-          await request('/admin/api/identities/' + encodeURIComponent(identity.id), { method: 'DELETE' });
-        } else {
-          await request('/admin/api/identities/' + encodeURIComponent(identity.id) + '/' + button.dataset.action, { method: 'POST' });
-        }
+        if (!confirm('Permanently delete ' + identity.localPart + '@' + identity.domain + '?')) return;
+        await request('/admin/api/identities/' + encodeURIComponent(identity.id), { method: 'DELETE' });
         await loadIdentities();
       } catch (error) {
         alert(error.message);
@@ -1033,13 +1085,13 @@ const adminPage = String.raw`<!doctype html>
     // --- Plans ---
     const MB = 1024 * 1024;
     let plans = [];
-    let assignments = [];
-    let assignmentSearchTimer;
+    let domains = [];
     const planRows = document.querySelector('#plan-rows');
     const planCount = document.querySelector('#plan-count');
     const planForm = document.querySelector('#plan-form');
     const planMessage = document.querySelector('#plan-message');
     const planFormTitle = document.querySelector('#plan-form-title');
+    const planDomains = document.querySelector('#plan-domains');
 
     function formatBytes(bytes) {
       return (Number(bytes) / MB).toFixed(1) + ' MB';
@@ -1048,19 +1100,32 @@ const adminPage = String.raw`<!doctype html>
     async function loadPlans() {
       const data = await request('/admin/api/plans');
       plans = data.plans;
+      domains = data.domains || [];
       planCount.textContent = String(plans.length);
       planRows.innerHTML = plans.map(renderPlanRow).join('');
-      const select = document.querySelector('#assignment-plan');
-      select.innerHTML = plans.map((plan) => '<option value="' + escapeHtml(plan.name) + '">' + escapeHtml(plan.name) + (plan.isDefault ? ' (default)' : '') + '</option>').join('');
+      populateAccountPlanSelect();
+    }
+
+    function renderPlanDomains(selected) {
+      const chosen = selected || [];
+      if (!domains.length) {
+        planDomains.innerHTML = '<span class="hint">No domains configured.</span>';
+        return;
+      }
+      planDomains.innerHTML = domains.map((domain) =>
+        '<label class="check"><input type="checkbox" class="plan-domain" value="' + escapeHtml(domain) + '"' + (chosen.includes(domain) ? ' checked' : '') + '> ' + escapeHtml(domain) + '</label>'
+      ).join('');
     }
 
     function renderPlanRow(plan) {
       const name = escapeHtml(plan.name) + (plan.isDefault ? ' <span class="badge ok">default</span>' : '');
+      const planDomainsLabel = plan.allowedDomains && plan.allowedDomains.length ? escapeHtml(plan.allowedDomains.join(', ')) : 'all';
       return '<tr>' +
         '<td data-label="Plan"><strong>' + name + '</strong></td>' +
         '<td data-label="Rate">' + plan.perMinute + ' / ' + plan.perHour + ' / ' + plan.perDay + '</td>' +
         '<td data-label="Max size">' + formatBytes(plan.maxMessageBytes) + '</td>' +
         '<td data-label="Max rcpt">' + plan.maxRecipients + '</td>' +
+        '<td data-label="Domains">' + planDomainsLabel + '</td>' +
         '<td data-label="Actions" class="actions"><div class="row-actions">' +
           '<button class="secondary" type="button" data-plan-action="edit" data-name="' + escapeHtml(plan.name) + '">Edit</button>' +
           (plan.isDefault ? '' : '<button class="danger" type="button" data-plan-action="delete" data-name="' + escapeHtml(plan.name) + '">Delete</button>') +
@@ -1077,6 +1142,7 @@ const adminPage = String.raw`<!doctype html>
       document.querySelector('#plan-max-recipients').value = plan.maxRecipients ?? '';
       document.querySelector('#plan-max-mb').value = plan.maxMessageBytes != null ? (plan.maxMessageBytes / MB) : '';
       document.querySelector('#plan-default').checked = Boolean(plan.isDefault);
+      renderPlanDomains(plan.allowedDomains || []);
       planFormTitle.textContent = plan.name ? 'Edit plan' : 'New plan';
       setMessage(planMessage, '', '');
     }
@@ -1094,6 +1160,7 @@ const adminPage = String.raw`<!doctype html>
         perDay: Number(document.querySelector('#plan-per-day').value),
         maxRecipients: Number(document.querySelector('#plan-max-recipients').value),
         maxMessageBytes: Math.round(Number(document.querySelector('#plan-max-mb').value) * MB),
+        allowedDomains: Array.from(document.querySelectorAll('.plan-domain:checked')).map((input) => input.value),
         isDefault: document.querySelector('#plan-default').checked,
       };
       try {
@@ -1127,80 +1194,147 @@ const adminPage = String.raw`<!doctype html>
 
     document.querySelector('#plan-reset').addEventListener('click', resetPlanForm);
 
-    // --- Pubkey plans ---
-    const assignmentRows = document.querySelector('#assignment-rows');
-    const assignmentCount = document.querySelector('#assignment-count');
-    const assignmentForm = document.querySelector('#assignment-form');
-    const assignmentMessage = document.querySelector('#assignment-message');
-    const assignmentSearch = document.querySelector('#assignment-search');
+    // --- Accounts ---
+    let accounts = [];
+    let accountSearchTimer;
+    const accountRows = document.querySelector('#account-rows');
+    const accountCount = document.querySelector('#account-count');
+    const accountForm = document.querySelector('#account-form');
+    const accountMessage = document.querySelector('#account-message');
+    const accountFormTitle = document.querySelector('#account-form-title');
+    const accountSearch = document.querySelector('#account-search');
+    const accountPlanSelect = document.querySelector('#account-plan');
 
-    async function loadAssignments() {
-      const query = assignmentSearch.value.trim();
-      const data = await request('/admin/api/pubkey-plans' + (query ? '?search=' + encodeURIComponent(query) : ''));
-      assignments = data.assignments;
-      assignmentCount.textContent = String(assignments.length);
-      assignmentRows.innerHTML = assignments.map(renderAssignmentRow).join('');
+    function populateAccountPlanSelect() {
+      const current = accountPlanSelect.value;
+      accountPlanSelect.innerHTML = '<option value="">(default)</option>' +
+        plans.map((plan) => '<option value="' + escapeHtml(plan.name) + '">' + escapeHtml(plan.name) + (plan.isDefault ? ' (default)' : '') + '</option>').join('');
+      accountPlanSelect.value = current;
     }
 
-    function renderAssignmentRow(assignment) {
+    async function loadAccounts() {
+      const query = accountSearch.value.trim();
+      const data = await request('/admin/api/accounts' + (query ? '?search=' + encodeURIComponent(query) : ''));
+      accounts = data.accounts;
+      accountCount.textContent = String(accounts.length);
+      accountRows.innerHTML = accounts.map(renderAccountRow).join('');
+    }
+
+    function renderAccountRow(account) {
+      const status = (account.active ? '<span class="badge ok">active</span>' : '<span class="badge off">inactive</span>') + ' ' +
+        (account.mailEnabled ? '<span class="badge ok">mail</span>' : '<span class="badge off">mail off</span>');
+      const plan = account.plan ? escapeHtml(account.plan) : 'default';
       return '<tr>' +
-        '<td data-label="Pubkey" class="mono">' + escapeHtml(assignment.pubkey) + '</td>' +
-        '<td data-label="Plan"><span class="badge">' + escapeHtml(assignment.plan) + '</span></td>' +
+        '<td data-label="Pubkey" class="mono">' + escapeHtml(account.pubkey) + '</td>' +
+        '<td data-label="Status">' + status + '</td>' +
+        '<td data-label="Plan"><span class="badge">' + plan + '</span></td>' +
         '<td data-label="Actions" class="actions"><div class="row-actions">' +
-          '<button class="secondary" type="button" data-assignment-action="edit" data-pubkey="' + escapeHtml(assignment.pubkey) + '">Edit</button>' +
-          '<button class="danger" type="button" data-assignment-action="delete" data-pubkey="' + escapeHtml(assignment.pubkey) + '">Remove</button>' +
+          '<button class="secondary" type="button" data-account-action="edit" data-pubkey="' + escapeHtml(account.pubkey) + '">Edit</button>' +
+          '<button class="danger" type="button" data-account-action="delete" data-pubkey="' + escapeHtml(account.pubkey) + '">Delete</button>' +
         '</div></td>' +
       '</tr>';
     }
 
-    function resetAssignmentForm() {
-      document.querySelector('#assignment-pubkey').value = '';
-      document.querySelector('#assignment-pubkey').readOnly = false;
-      if (plans[0]) document.querySelector('#assignment-plan').value = plans[0].name;
-      setMessage(assignmentMessage, '', '');
+    function fillAccountForm(account) {
+      document.querySelector('#account-pubkey').value = account.pubkey || '';
+      document.querySelector('#account-pubkey').readOnly = Boolean(account.pubkey);
+      accountPlanSelect.value = account.plan || '';
+      document.querySelector('#account-relays').value = (account.relays || []).join('\n');
+      document.querySelector('#account-active').checked = account.active !== false;
+      document.querySelector('#account-mail').checked = account.mailEnabled !== false;
+      accountFormTitle.textContent = account.pubkey ? 'Edit account' : 'New account';
+      setMessage(accountMessage, '', '');
     }
 
-    assignmentForm.addEventListener('submit', async (event) => {
+    function resetAccountForm() {
+      fillAccountForm({ active: true, mailEnabled: true, plan: '', relays: [] });
+    }
+
+    accountForm.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const pubkey = document.querySelector('#assignment-pubkey').value.trim();
+      const pubkey = document.querySelector('#account-pubkey').value.trim();
+      const body = {
+        active: document.querySelector('#account-active').checked,
+        mailEnabled: document.querySelector('#account-mail').checked,
+        plan: accountPlanSelect.value || null,
+        relays: document.querySelector('#account-relays').value.split(/[\s,]+/).map((relay) => relay.trim()).filter(Boolean),
+      };
       try {
-        await request('/admin/api/pubkey-plans/' + encodeURIComponent(pubkey), {
-          method: 'PUT',
-          body: JSON.stringify({ plan: document.querySelector('#assignment-plan').value }),
-        });
-        setMessage(assignmentMessage, 'Saved', 'ok');
-        resetAssignmentForm();
-        await loadAssignments();
+        await request('/admin/api/accounts/' + encodeURIComponent(pubkey), { method: 'PUT', body: JSON.stringify(body) });
+        setMessage(accountMessage, 'Saved', 'ok');
+        resetAccountForm();
+        await loadAccounts();
       } catch (error) {
-        setMessage(assignmentMessage, error.message, 'error');
+        setMessage(accountMessage, error.message, 'error');
       }
     });
 
-    assignmentRows.addEventListener('click', async (event) => {
-      const button = event.target.closest('button[data-assignment-action]');
+    accountRows.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-account-action]');
       if (!button) return;
-      const assignment = assignments.find((item) => item.pubkey === button.dataset.pubkey);
-      if (!assignment) return;
+      const account = accounts.find((item) => item.pubkey === button.dataset.pubkey);
+      if (!account) return;
 
-      if (button.dataset.assignmentAction === 'edit') {
-        document.querySelector('#assignment-pubkey').value = assignment.pubkey;
-        document.querySelector('#assignment-pubkey').readOnly = true;
-        document.querySelector('#assignment-plan').value = assignment.plan;
+      if (button.dataset.accountAction === 'edit') {
+        fillAccountForm(account);
         return;
       }
       try {
-        if (!confirm('Remove plan assignment for this pubkey?')) return;
-        await request('/admin/api/pubkey-plans/' + encodeURIComponent(assignment.pubkey), { method: 'DELETE' });
-        await loadAssignments();
+        if (!confirm('Delete the account row for this pubkey? It reverts to the open-service defaults.')) return;
+        await request('/admin/api/accounts/' + encodeURIComponent(account.pubkey), { method: 'DELETE' });
+        await loadAccounts();
       } catch (error) {
         alert(error.message);
       }
     });
 
-    document.querySelector('#assignment-reset').addEventListener('click', resetAssignmentForm);
-    assignmentSearch.addEventListener('input', () => {
-      clearTimeout(assignmentSearchTimer);
-      assignmentSearchTimer = setTimeout(() => loadAssignments().catch(() => {}), 180);
+    document.querySelector('#account-reset').addEventListener('click', resetAccountForm);
+    document.querySelector('#new-account').addEventListener('click', resetAccountForm);
+    accountSearch.addEventListener('input', () => {
+      clearTimeout(accountSearchTimer);
+      accountSearchTimer = setTimeout(() => loadAccounts().catch(() => {}), 180);
+    });
+
+    // --- Domains ---
+    const domainRows = document.querySelector('#domain-rows');
+    const domainCount = document.querySelector('#domain-count');
+    const domainForm = document.querySelector('#domain-form');
+    const domainInput = document.querySelector('#domain-input');
+    const domainMessage = document.querySelector('#domain-message');
+
+    async function loadDomains() {
+      const data = await request('/admin/api/domains');
+      domainCount.textContent = String(data.domains.length);
+      domainRows.innerHTML = data.domains.map((domain) =>
+        '<tr><td data-label="Domain" class="mono">' + escapeHtml(domain) + '</td>' +
+        '<td data-label="Actions" class="actions"><div class="row-actions">' +
+        '<button class="danger" type="button" data-domain="' + escapeHtml(domain) + '">Delete</button>' +
+        '</div></td></tr>'
+      ).join('');
+    }
+
+    domainForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        await request('/admin/api/domains', { method: 'POST', body: JSON.stringify({ domain: domainInput.value }) });
+        domainInput.value = '';
+        setMessage(domainMessage, 'Saved', 'ok');
+        await loadDomains();
+      } catch (error) {
+        setMessage(domainMessage, error.message, 'error');
+      }
+    });
+
+    domainRows.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-domain]');
+      if (!button) return;
+      try {
+        if (!confirm('Delete domain ' + button.dataset.domain + '?')) return;
+        await request('/admin/api/domains/' + encodeURIComponent(button.dataset.domain), { method: 'DELETE' });
+        await loadDomains();
+      } catch (error) {
+        alert(error.message);
+      }
     });
 
     // --- Tabs ---
@@ -1212,11 +1346,12 @@ const adminPage = String.raw`<!doctype html>
         document.querySelectorAll('.view').forEach((view) => view.classList.toggle('hidden', view.id !== 'view-' + target));
         try {
           if (target === 'plans') await loadPlans();
-          if (target === 'pubkey-plans') {
+          if (target === 'accounts') {
             if (!plansLoaded) { await loadPlans(); plansLoaded = true; }
-            resetAssignmentForm();
-            await loadAssignments();
+            resetAccountForm();
+            await loadAccounts();
           }
+          if (target === 'domains') await loadDomains();
         } catch (error) {
           // surfaced by individual loaders
         }

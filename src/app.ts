@@ -4,14 +4,13 @@ import { registerAdminRoutes } from './handlers/admin.js'
 import { createInboundDecisionHandler } from './handlers/inboundDecision.js'
 import { createNip05Handler } from './handlers/nip05.js'
 import { createOutboundDecisionHandler } from './handlers/outboundDecision.js'
-import type { AppConfig, IdentityRepository, PolicyRepository } from './types.js'
+import type { AccountRepository, AppConfig, DomainRepository, IdentityRepository, PolicyRepository } from './types.js'
 
 export async function buildApp(
-  repo: IdentityRepository & PolicyRepository,
-  config: Pick<
-    AppConfig,
-    'protectedEmailDomains' | 'inboundDecisionToken' | 'outboundDecisionToken' | 'adminPassword'
-  > & { outboundMaxBodyBytes?: number },
+  repo: IdentityRepository & AccountRepository & PolicyRepository & DomainRepository,
+  config: Pick<AppConfig, 'inboundDecisionToken' | 'outboundDecisionToken' | 'adminPassword'> & {
+    outboundMaxBodyBytes?: number
+  },
 ) {
   const app = Fastify({ logger: true })
 

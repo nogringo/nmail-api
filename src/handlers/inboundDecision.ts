@@ -2,11 +2,18 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { timingSafeEqual } from 'node:crypto'
 import { parseEmailAddress } from '../email.js'
 import { decodeBase36Pubkey, decodeNpub } from '../nostr.js'
-import type { AppConfig, IdentityRepository, InboundDecisionPayload, InboundDecisionResponse } from '../types.js'
+import type {
+  AccountRepository,
+  AppConfig,
+  DomainRepository,
+  IdentityRepository,
+  InboundDecisionPayload,
+  InboundDecisionResponse,
+} from '../types.js'
 
 export function createInboundDecisionHandler(
-  repo: IdentityRepository,
-  config: Pick<AppConfig, 'protectedEmailDomains' | 'inboundDecisionToken'>,
+  repo: IdentityRepository & AccountRepository & DomainRepository,
+  config: Pick<AppConfig, 'inboundDecisionToken'>,
 ) {
   return async function inboundDecisionHandler(request: FastifyRequest, reply: FastifyReply) {
     if (!isAuthorizedDecisionRequest(request, config.inboundDecisionToken, 'x-inbound-decision-token')) {
@@ -19,7 +26,8 @@ export function createInboundDecisionHandler(
     }
 
     try {
-      const decision = await decideDelivery(payload, repo, config.protectedEmailDomains)
+      const domains = new Set(await repo.listDomains())
+      const decision = await decideDelivery(payload, repo, domains)
       return reply.send(decision)
     } catch (error) {
       request.log.error({ error }, 'Inbound decision lookup failed')
@@ -43,30 +51,28 @@ export function isAuthorizedDecisionRequest(
 
 export async function decideDelivery(
   payload: InboundDecisionPayload,
-  repo: IdentityRepository,
-  protectedEmailDomains: Set<string>,
+  repo: IdentityRepository & AccountRepository,
+  domains: Set<string>,
 ): Promise<InboundDecisionResponse> {
-  const requiredByDomain = new Map<string, Set<string>>()
+  const deliverableByPubkey = new Map<string, boolean>()
 
   for (const recipient of payload.message.recipients) {
     const parsed = parseEmailAddress(recipient)
-    if (!parsed || !protectedEmailDomains.has(parsed.domain)) continue
+    if (!parsed || !domains.has(parsed.domain)) continue
 
     const pubkey = await resolveRecipientPubkey(parsed.domain, parsed.localPart, repo)
     if (!pubkey) return denyUnknownRecipient()
 
-    const requiredPubkeys = requiredByDomain.get(parsed.domain) ?? new Set<string>()
-    requiredPubkeys.add(pubkey)
-    requiredByDomain.set(parsed.domain, requiredPubkeys)
-  }
-
-  for (const [domain, pubkeys] of requiredByDomain) {
-    const identities = await repo.findMailEnabledIdentitiesByPubkeys(domain, [...pubkeys])
-    for (const pubkey of pubkeys) {
-      if (!identities.has(pubkey)) {
-        return denyUnknownRecipient()
-      }
+    let deliverable = deliverableByPubkey.get(pubkey)
+    if (deliverable === undefined) {
+      // Open service: a missing account is deliverable by default; a row only
+      // matters when it disables the account or its mail.
+      const account = await repo.getAccount(pubkey)
+      deliverable = !account || (account.active && account.mailEnabled)
+      deliverableByPubkey.set(pubkey, deliverable)
     }
+
+    if (!deliverable) return denyUnknownRecipient()
   }
 
   return { decision: 'allow' }

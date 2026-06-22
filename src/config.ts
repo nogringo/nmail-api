@@ -1,4 +1,3 @@
-import { normalizeDomain } from './email.js'
 import type { AppConfig } from './types.js'
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -12,7 +11,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     port: parsePort(env.PORT),
     databaseUrl,
-    protectedEmailDomains: parseProtectedDomains(env.PROTECTED_EMAIL_DOMAINS),
     inboundDecisionToken,
     outboundDecisionToken: parseOptionalSecret(env.OUTBOUND_DECISION_TOKEN),
     outboundMaxBodyBytes: parseOutboundMaxBodyBytes(env.OUTBOUND_MAX_BODY_BYTES),
@@ -29,17 +27,6 @@ function parsePort(value: string | undefined): number {
   }
 
   return port
-}
-
-export function parseProtectedDomains(value: string | undefined): Set<string> {
-  const rawDomains = value && value.trim() ? value.split(',') : ['nmail.li']
-  const domains = rawDomains.map((domain) => normalizeDomain(domain)).filter(Boolean)
-
-  if (domains.length === 0) {
-    throw new Error('PROTECTED_EMAIL_DOMAINS must include at least one valid domain')
-  }
-
-  return new Set(domains)
 }
 
 function parseOutboundMaxBodyBytes(value: string | undefined): number {

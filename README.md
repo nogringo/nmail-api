@@ -16,28 +16,30 @@ Environment variables:
 
 - `PORT`: HTTP port, default `3000`.
 - `DATABASE_URL`: Postgres connection string.
-- `PROTECTED_EMAIL_DOMAINS`: comma-separated domains that require a known mail-enabled pubkey before inbound mail is accepted. Defaults to `nmail.li`.
 - `INBOUND_DECISION_TOKEN`: shared secret required by `POST /inbound/decision`.
 - `OUTBOUND_DECISION_TOKEN`: optional shared secret that enables and protects `POST /outbound/decision`. When unset, the outbound route is not registered.
 - `OUTBOUND_MAX_BODY_BYTES`: max accepted body size for `POST /outbound/decision`, default `33554432` (32 MB). Must be larger than the biggest plan message size so the full `.eml` fits.
 - `ADMIN_PASSWORD`: optional password that enables the `/admin` identity management UI.
 
-## Identity Model
+## Account and identity model
 
-`identities` stores the address identities used by both NIP-05 resolution
-and inbound mail policy.
+The data model separates the **account** (the user, keyed by pubkey) from the
+**identity** (a human-readable alias pointing at a pubkey). See
+[docs/AccountModel.md](docs/AccountModel.md) for the full design.
 
-- `visibility = 'public'`: resolvable by anyone through `/.well-known/nostr.json`.
-- `visibility = 'private'`: hidden from public NIP-05 resolution.
-- `mail_enabled = true`: usable by the inbound mail decision endpoint.
-- `active = false`: disabled everywhere.
+- `accounts` holds person-level state: `active`, `mail_enabled`, `plan`
+  (`NULL` = the default plan) and `relays`. The service is **open**: a pubkey
+  with no account row behaves as active, mail enabled, default plan.
+- `identities` maps an alias (`local_part@domain`) to a pubkey and carries only
+  `visibility` (`public` is resolvable through `/.well-known/nostr.json`,
+  `private` is hidden).
+- `plans` hold quotas (rate, max `.eml` size, max recipients) and
+  `allowed_domains` (which domains the plan may create/use addresses on).
 
-For protected inbound mail domains, recipients may use a local identity
-(`alice@nmail.li`), an encoded Nostr pubkey (`npub...@nmail.li`), a raw
-64-character hex pubkey, or a base36-encoded pubkey. The decision endpoint
-resolves the recipient to a pubkey, then accepts delivery when an active,
-mail-enabled identity exists with the same protected domain and pubkey. Local
-identities are checked before base36 decoding so normal aliases keep working.
+Addresses come in two classes: a **provisioned alias** (`alice@example.com`, has an
+`identities` row) and a **pubkey-encoded** address (`npub...@`, raw 64-char hex,
+or base36-encoded pubkey) which resolves to its pubkey without a row. NIP-05
+relays are served from the account of the resolved pubkey.
 
 ## Database
 
@@ -67,15 +69,22 @@ for migration in migrations/*.sql; do \
 done
 ```
 
-Example identity:
+Example account and identity (the account row is created automatically when an
+identity is added, so it is only needed to override the defaults):
 
 ```sql
-insert into identities (domain, local_part, pubkey, relays)
+insert into accounts (pubkey, relays)
 values (
-  'nmail.li',
-  'alice',
   'b479e0d9afe3cf3caf43f1ded62da06d248d171d93f04c759431879afc371457',
-  '["wss://relay.nmail.li"]'::jsonb
+  '["wss://relay.example.com"]'::jsonb
+)
+on conflict (pubkey) do nothing;
+
+insert into identities (domain, local_part, pubkey)
+values (
+  'example.com',
+  'alice',
+  'b479e0d9afe3cf3caf43f1ded62da06d248d171d93f04c759431879afc371457'
 );
 ```
 
@@ -88,12 +97,14 @@ ADMIN_PASSWORD=change-me npm run dev
 ```
 
 Open `http://localhost:3000/admin` and sign in with the configured password.
-The console has three tabs:
+The console has four tabs:
 
-- **Identities**: create, update, activate/deactivate, and delete identities.
-- **Plans**: edit the limits of each plan, add new plans, and choose the default.
-- **Pubkey plans**: assign a plan to a pubkey, or remove an assignment so the
-  pubkey falls back to the default plan.
+- **Identities**: create, update, and delete alias to pubkey mappings (domain,
+  local part, pubkey, visibility).
+- **Accounts**: per pubkey, toggle `active` and `mail_enabled`, set the plan, and
+  edit relays. Deleting an account row reverts the pubkey to the defaults.
+- **Plans**: edit quotas and allowed domains, add new plans, and choose the default.
+- **Domains**: add or remove the domains the service handles.
 
 If `ADMIN_PASSWORD` is not set, the admin routes are not registered.
 
@@ -170,35 +181,42 @@ message size limit can only be enforced when the `.eml` is present.
 The bridge posts the authenticated seal pubkey as `nostrSender` and the message
 MIME `headers`. The endpoint applies, in order:
 
-1. **Ownership**: the `From` address must sit on a protected domain and resolve
-   to an active, mail-enabled identity whose pubkey matches `nostrSender`, so a
-   key can only send as an address it owns.
-2. **Plan limits** for the sender pubkey (see below): recipient count
-   (`To` + `Cc` + `Bcc`), message size (the `.eml` byte length), and a sliding
-   send-rate window (per minute, hour, day).
+1. **Ownership**: the `From` domain must be a managed domain, and either a matching
+   `identities` alias is owned by `nostrSender` (a provisioned alias, which keeps
+   working regardless of the current plan), or the local part decodes to
+   `nostrSender` (a pubkey-encoded address). Encoded addresses also auto-create a
+   free account and must be on a domain allowed by the current plan.
+2. **Account**: the sender account must be `active` and `mail_enabled`.
+3. **Plan limits** for the sender pubkey: recipient count (`To` + `Cc` + `Bcc`),
+   message size (the `.eml` byte length), and a sliding send-rate window (per
+   minute, hour, day).
 
 A passing message returns `{ "decision": "allow" }` and is recorded for rate
 limiting. A blocked message returns `{ "decision": "deny", "reason": ..., "message": ... }`
-with reason `unauthorized_sender`, `too_many_recipients`, `message_too_large`, or
-`rate_limited`. Lookup failures return `503` so the bridge retries. Re-asking
-about an already-recorded `giftWrapId` is idempotent and is not double counted.
+with reason `unauthorized_sender`, `account_disabled`, `domain_not_allowed`,
+`too_many_recipients`, `message_too_large`, or `rate_limited`. Lookup failures
+return `503` so the bridge retries. Re-asking about an already-recorded
+`giftWrapId` is idempotent and is not double counted.
 
 Send `OUTBOUND_DECISION_TOKEN` with `Authorization: Bearer <token>`,
 `x-outbound-decision-token: <token>`, or `?token=<token>`.
 
 ### Plans
 
-Outbound limits are grouped into **plans**. Each pubkey is mapped to a plan;
-pubkeys with no mapping fall back to the default plan. Two plans are seeded by
-migration `003`:
+Outbound limits are grouped into **plans**. Each account references a plan
+(`accounts.plan`); accounts with no plan fall back to the default. Two plans are
+seeded by migration `003`:
 
 | Plan | Per minute | Per hour | Per day | Max `.eml` size | Max recipients |
 |---|---|---|---|---|---|
 | `free` (default) | 5 | 30 | 50 | 10 MB | 5 |
 | `premium` | 10 | 100 | 500 | 25 MB | 10 |
 
-Plans and pubkey assignments are managed from the admin UI (`Plans` and
-`Pubkey plans` tabs), and new plans can be added. The message size limit is
-measured on the encoded `.eml`, matching how SMTP servers enforce `SIZE`; because
-attachments are base64-encoded (about +37%), 10 MB of raw files is roughly a
-13.7 MB `.eml`, so set the limit on the message accordingly.
+Plans are managed from the admin UI (`Plans` tab) and per-pubkey plan choice
+from the `Accounts` tab; new plans can be added. Each plan also has
+`allowed_domains`: the domains it may create or send pubkey-encoded addresses on
+(empty = all managed domains; provisioned aliases are exempt and keep working
+after a downgrade). The message size limit is measured on the encoded `.eml`,
+matching how SMTP servers enforce `SIZE`; because attachments are base64-encoded
+(about +37%), 10 MB of raw files is roughly a 13.7 MB `.eml`, so set the limit on
+the message accordingly.

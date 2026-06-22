@@ -16,7 +16,6 @@ const basePayload: InboundDecisionPayload = {
 }
 
 const appConfig = {
-  protectedEmailDomains: new Set(['nmail.li']),
   inboundDecisionToken: 'secret-token',
 }
 
@@ -185,9 +184,10 @@ test('Inbound decision allows private mail-enabled identities on protected domai
   await app.close()
 })
 
-test('Inbound decision denies identities with inbound mail disabled', async () => {
+test('Inbound decision denies recipients whose account has mail disabled', async () => {
   const repo = new MemoryIdentityRepository()
-  repo.add(identity({ mailEnabled: false }))
+  repo.add(identity())
+  repo.setAccount('0'.repeat(64), { mailEnabled: false })
   const app = await buildApp(repo, appConfig)
 
   const response = await app.inject({
@@ -209,6 +209,7 @@ test('Inbound decision denies identities with inbound mail disabled', async () =
 
 test('Inbound decision denies unknown protected recipients', async () => {
   const repo = new MemoryIdentityRepository()
+  repo.domains.add('nmail.li')
   const app = await buildApp(repo, appConfig)
 
   const response = await app.inject({

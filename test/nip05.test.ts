@@ -6,7 +6,8 @@ import { identity, MemoryIdentityRepository } from './helpers.js'
 test('NIP-05 returns active identity with relays', async () => {
   const repo = new MemoryIdentityRepository()
   repo.add(identity())
-  const app = await buildApp(repo, { protectedEmailDomains: new Set(['nmail.li']), inboundDecisionToken: 'secret-token' })
+  repo.setAccount('0'.repeat(64), { relays: ['wss://relay.damus.io'] })
+  const app = await buildApp(repo, { inboundDecisionToken: 'secret-token' })
 
   const response = await app.inject({
     method: 'GET',
@@ -25,7 +26,7 @@ test('NIP-05 returns active identity with relays', async () => {
 
 test('NIP-05 returns an empty response when identity is absent', async () => {
   const repo = new MemoryIdentityRepository()
-  const app = await buildApp(repo, { protectedEmailDomains: new Set(['nmail.li']), inboundDecisionToken: 'secret-token' })
+  const app = await buildApp(repo, { inboundDecisionToken: 'secret-token' })
 
   const response = await app.inject({
     method: 'GET',
@@ -42,7 +43,7 @@ test('NIP-05 returns an empty response when identity is absent', async () => {
 test('NIP-05 does not return private identities publicly', async () => {
   const repo = new MemoryIdentityRepository()
   repo.add(identity({ visibility: 'private' }))
-  const app = await buildApp(repo, { protectedEmailDomains: new Set(['nmail.li']), inboundDecisionToken: 'secret-token' })
+  const app = await buildApp(repo, { inboundDecisionToken: 'secret-token' })
 
   const response = await app.inject({
     method: 'GET',

@@ -4,7 +4,6 @@ import { buildApp } from '../src/app.js'
 import { MemoryIdentityRepository } from './helpers.js'
 
 const appConfig = {
-  protectedEmailDomains: new Set(['nmail.li']),
   inboundDecisionToken: 'secret-token',
   adminPassword: 'admin-secret',
 }
@@ -105,52 +104,113 @@ test('Admin will not delete the default plan', async () => {
   await app.close()
 })
 
-test('Admin assigns and clears a pubkey plan', async () => {
+test('Admin sets, lists and deletes an account', async () => {
   const repo = new MemoryIdentityRepository()
   const app = await buildApp(repo, appConfig)
   const cookie = await login(app)
   const pubkey = '1'.repeat(64)
 
-  const assigned = await app.inject({
+  const set = await app.inject({
     method: 'PUT',
-    url: `/admin/api/pubkey-plans/${pubkey}`,
+    url: `/admin/api/accounts/${pubkey}`,
     headers: { cookie },
-    payload: { plan: 'premium' },
+    payload: { active: true, mailEnabled: false, plan: 'premium', relays: ['wss://relay.nmail.li'] },
   })
-  assert.equal(assigned.statusCode, 200)
-  assert.equal(assigned.json().assignment.plan, 'premium')
+  assert.equal(set.statusCode, 200)
+  assert.equal(set.json().account.plan, 'premium')
+  assert.equal(set.json().account.mailEnabled, false)
+  assert.deepEqual(set.json().account.relays, ['wss://relay.nmail.li'])
 
-  const listed = await app.inject({ method: 'GET', url: '/admin/api/pubkey-plans', headers: { cookie } })
-  assert.equal(listed.json().assignments.length, 1)
+  const listed = await app.inject({ method: 'GET', url: '/admin/api/accounts', headers: { cookie } })
+  assert.equal(listed.json().accounts.length, 1)
 
-  const cleared = await app.inject({ method: 'DELETE', url: `/admin/api/pubkey-plans/${pubkey}`, headers: { cookie } })
-  assert.equal(cleared.statusCode, 204)
+  const deleted = await app.inject({ method: 'DELETE', url: `/admin/api/accounts/${pubkey}`, headers: { cookie } })
+  assert.equal(deleted.statusCode, 204)
 
   await app.close()
 })
 
-test('Admin rejects assignment to an unknown plan or invalid pubkey', async () => {
+test('Admin defaults an account to the default plan when plan is null', async () => {
+  const repo = new MemoryIdentityRepository()
+  const app = await buildApp(repo, appConfig)
+  const cookie = await login(app)
+
+  const set = await app.inject({
+    method: 'PUT',
+    url: `/admin/api/accounts/${'3'.repeat(64)}`,
+    headers: { cookie },
+    payload: { active: true, mailEnabled: true, plan: null, relays: [] },
+  })
+
+  assert.equal(set.statusCode, 200)
+  assert.equal(set.json().account.plan, null)
+
+  await app.close()
+})
+
+test('Admin rejects an account with an unknown plan or invalid pubkey', async () => {
   const repo = new MemoryIdentityRepository()
   const app = await buildApp(repo, appConfig)
   const cookie = await login(app)
 
   const unknownPlan = await app.inject({
     method: 'PUT',
-    url: `/admin/api/pubkey-plans/${'2'.repeat(64)}`,
+    url: `/admin/api/accounts/${'2'.repeat(64)}`,
     headers: { cookie },
-    payload: { plan: 'nope' },
+    payload: { active: true, mailEnabled: true, plan: 'nope', relays: [] },
   })
   const invalidPubkey = await app.inject({
     method: 'PUT',
-    url: '/admin/api/pubkey-plans/not-a-pubkey',
+    url: '/admin/api/accounts/not-a-pubkey',
     headers: { cookie },
-    payload: { plan: 'free' },
+    payload: { active: true, mailEnabled: true, plan: 'free', relays: [] },
   })
 
   assert.equal(unknownPlan.statusCode, 400)
   assert.equal(unknownPlan.json().error, 'unknown_plan')
   assert.equal(invalidPubkey.statusCode, 400)
   assert.equal(invalidPubkey.json().error, 'invalid_pubkey')
+
+  await app.close()
+})
+
+test('Admin adds, lists and deletes a domain', async () => {
+  const repo = new MemoryIdentityRepository()
+  const app = await buildApp(repo, appConfig)
+  const cookie = await login(app)
+
+  const added = await app.inject({
+    method: 'POST',
+    url: '/admin/api/domains',
+    headers: { cookie },
+    payload: { domain: 'Example.COM' },
+  })
+  assert.equal(added.statusCode, 201)
+  assert.equal(added.json().domain, 'example.com')
+
+  const listed = await app.inject({ method: 'GET', url: '/admin/api/domains', headers: { cookie } })
+  assert.deepEqual(listed.json().domains, ['example.com'])
+
+  const deleted = await app.inject({ method: 'DELETE', url: '/admin/api/domains/example.com', headers: { cookie } })
+  assert.equal(deleted.statusCode, 204)
+
+  const empty = await app.inject({ method: 'GET', url: '/admin/api/domains', headers: { cookie } })
+  assert.deepEqual(empty.json().domains, [])
+
+  await app.close()
+})
+
+test('Admin rejects an invalid domain and a missing one', async () => {
+  const repo = new MemoryIdentityRepository()
+  const app = await buildApp(repo, appConfig)
+  const cookie = await login(app)
+
+  const invalid = await app.inject({ method: 'POST', url: '/admin/api/domains', headers: { cookie }, payload: { domain: '' } })
+  const missing = await app.inject({ method: 'DELETE', url: '/admin/api/domains/none.example', headers: { cookie } })
+
+  assert.equal(invalid.statusCode, 400)
+  assert.equal(invalid.json().error, 'invalid_domain')
+  assert.equal(missing.statusCode, 404)
 
   await app.close()
 })

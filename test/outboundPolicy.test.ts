@@ -7,7 +7,6 @@ import { identity, MemoryIdentityRepository } from './helpers.js'
 const SENDER = '0'.repeat(64)
 
 const appConfig = {
-  protectedEmailDomains: new Set(['nmail.li']),
   inboundDecisionToken: 'inbound-token',
   outboundDecisionToken: 'outbound-token',
 }
@@ -113,7 +112,7 @@ test('Outbound policy enforces the per-minute rate limit of the default plan', a
 
 test('Outbound policy uses the plan assigned to the pubkey', async () => {
   const { repo, app } = await withSender()
-  await repo.setPubkeyPlan(SENDER, 'premium')
+  repo.setAccount(SENDER, { plan: 'premium' })
 
   // 10 recipients is over free (5) but within premium (10).
   const recipients = Array.from({ length: 10 }, (_, index) => 'r' + index + '@x.com').join(', ')

@@ -1,0 +1,86 @@
+# Account model
+
+This document is the source of truth for how accounts, identities and plans
+relate, and how the inbound/outbound decisions use them. It exists so the design
+survives context loss between sessions.
+
+## Entities
+
+```
+plans      (name PK)     per_minute, per_hour, per_day, max_message_bytes,
+                         max_recipients, allowed_domains (jsonb[]), is_default
+accounts   (pubkey PK)   active, mail_enabled, plan -> plans (NULL = default),
+                         relays (jsonb[]), created_at, updated_at
+identities (domain,      pubkey -> accounts, visibility, created_at, updated_at
+            local_part)
+domains    (domain PK)   the domains the service handles, managed from /admin
+outbound_sends           pubkey, gift_wrap_id, created_at
+```
+
+- **account = the user**, keyed by its nostr pubkey. Holds everything that is a
+  property of the *person*: `active`, `mail_enabled`, `plan`, `relays`.
+- **identity = a human-readable alias** (`alice@example.com`) pointing at a pubkey.
+  Holds only what is specific to the name: `visibility` (NIP-05 public/private).
+  It no longer carries `mail_enabled`, `active` or `relays` (moved to account).
+- **plan** = quotas + `allowed_domains` (the domains the plan may *create/use*
+  addresses on). `NULL` plan on an account means "use the default plan".
+
+## Two classes of sending address
+
+| Class | Example | identities row? | ownership proof |
+|-------|---------|-----------------|-----------------|
+| Provisioned alias | `alice@example.com` | yes | the row maps alias -> pubkey |
+| Pubkey-encoded | `npub1...@`, `<hex64>@`, `<base36>@` | not required | the localpart decodes to the pubkey |
+
+## Open service / auto-create
+
+The service is **open**: any pubkey can use it. A pubkey with no `accounts` row
+behaves as `active = true`, `mail_enabled = true`, default plan.
+
+- **Outbound** from an encoded address auto-creates a free account
+  (`getOrCreateAccount`) so the user becomes manageable (bannable, upgradable).
+- **Inbound** never persists an account; a missing account is treated as the
+  permissive default (so encoded recipients are deliverable by default).
+
+## Outbound decision (`/outbound/decision`)
+
+For `localPart@domain` with authenticated `nostrSender`:
+
+1. `domain` must be in the `domains` table, else `deny unauthorized_sender`
+   (anti open-relay).
+2. Ownership:
+   - if an `identities` row exists for `(domain, localPart)`: its pubkey must be
+     the sender. Alias exists => **grandfathered**, no domain/plan check.
+   - else if `localPart` decodes to the sender pubkey: it is an **encoded**
+     address; auto-create the account and require `domain` to be in the plan's
+     `allowed_domains` (empty list = all managed domains).
+   - else `deny unauthorized_sender`.
+3. Account must be `active` and `mail_enabled`, else `deny account_disabled`.
+4. Plan quotas: recipients (`To`+`Cc`+`Bcc`), `.eml` size (`rawMime`), sliding
+   rate window (minute/hour/day). Over limit => `deny` with the matching reason.
+5. Idempotent on `giftWrapId` (already recorded => allow without recounting).
+
+Grandfathering: sending only checks alias existence + ownership, so an alias
+created while premium keeps working after a downgrade (its row persists). Encoded
+addresses are re-derivable, so they are gated by the *current* plan instead.
+
+## Inbound decision (`/inbound/decision`)
+
+For each recipient on a managed domain: resolve the pubkey (alias row or
+encoded decode). Unknown alias that does not decode => `deny unknown_recipient`.
+If the resolved pubkey has an account that is `active = false` or
+`mail_enabled = false` => `deny unknown_recipient`. Missing account = allowed.
+
+## NIP-05 (`/.well-known/nostr.json`)
+
+`name` -> public identity (alias) -> pubkey, then `relays` come from the
+**account** of that pubkey.
+
+## Migrations
+
+- `003` creates `plans`, `accounts`, `outbound_sends` (no `pubkey_plans`).
+- `004` backfills `accounts` from the existing `identities` (`bool_or(active)`,
+  `bool_or(mail_enabled)`, relays), then drops `active`/`mail_enabled`/`relays`
+  from `identities` and adds the FK `identities.pubkey -> accounts.pubkey`.
+- `005` creates the `domains` table (managed from /admin), replacing the
+  `PROTECTED_EMAIL_DOMAINS` environment variable.

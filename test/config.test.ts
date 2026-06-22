@@ -16,7 +16,6 @@ test('loadConfig includes the inbound decision token', () => {
   })
 
   assert.equal(config.inboundDecisionToken, 'secret-token')
-  assert.deepEqual([...config.protectedEmailDomains], ['nmail.li'])
 })
 
 test('loadConfig enables admin only when ADMIN_PASSWORD is set', () => {

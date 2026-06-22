@@ -1,7 +1,11 @@
 import pg from 'pg'
 import { FREE_PLAN } from './policy.js'
 import type {
+  Account,
+  AccountInput,
+  AccountRepository,
   AdminIdentity,
+  DomainRepository,
   IdentityInput,
   IdentityRepository,
   IdentityVisibility,
@@ -9,7 +13,6 @@ import type {
   Plan,
   PlanLimits,
   PolicyRepository,
-  PubkeyPlan,
   UserIdentity,
 } from './types.js'
 
@@ -20,10 +23,17 @@ interface IdentityRow {
   domain: string
   local_part: string
   pubkey: string
-  relays: unknown
   visibility: IdentityVisibility
-  mail_enabled: boolean
+  created_at?: Date | string
+  updated_at?: Date | string
+}
+
+interface AccountRow {
+  pubkey: string
   active: boolean
+  mail_enabled: boolean
+  plan: string | null
+  relays: unknown
   created_at?: Date | string
   updated_at?: Date | string
 }
@@ -35,6 +45,7 @@ interface PlanRow {
   per_day: number | string
   max_message_bytes: number | string
   max_recipients: number | string
+  allowed_domains: unknown
   is_default: boolean
   created_at?: Date | string
   updated_at?: Date | string
@@ -46,13 +57,7 @@ interface SendCountsRow {
   per_day: number | string
 }
 
-interface PubkeyPlanRow {
-  pubkey: string
-  plan: string
-  updated_at?: Date | string
-}
-
-export class PgIdentityRepository implements IdentityRepository, PolicyRepository {
+export class PgIdentityRepository implements IdentityRepository, AccountRepository, PolicyRepository, DomainRepository {
   private readonly pool: pg.Pool
 
   constructor(databaseUrl: string) {
@@ -62,7 +67,7 @@ export class PgIdentityRepository implements IdentityRepository, PolicyRepositor
   async findIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
     const result = await this.pool.query<IdentityRow>(
       `
-        select domain, local_part, pubkey, relays, visibility, mail_enabled, active
+        select domain, local_part, pubkey, visibility
         from identities
         where domain = $1 and local_part = $2
         limit 1
@@ -77,9 +82,11 @@ export class PgIdentityRepository implements IdentityRepository, PolicyRepositor
   async findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
     const result = await this.pool.query<IdentityRow>(
       `
-        select domain, local_part, pubkey, relays, visibility, mail_enabled, active
-        from identities
-        where domain = $1 and local_part = $2 and active = true and visibility = 'public'
+        select i.domain, i.local_part, i.pubkey, i.visibility
+        from identities i
+        left join accounts a on a.pubkey = i.pubkey
+        where i.domain = $1 and i.local_part = $2 and i.visibility = 'public'
+          and coalesce(a.active, true) = true
         limit 1
       `,
       [domain, localPart],
@@ -89,42 +96,12 @@ export class PgIdentityRepository implements IdentityRepository, PolicyRepositor
     return row ? toIdentity(row) : null
   }
 
-  async findMailEnabledIdentities(domain: string, localParts: string[]): Promise<Map<string, UserIdentity>> {
-    if (localParts.length === 0) return new Map()
-
-    const result = await this.pool.query<IdentityRow>(
-      `
-        select domain, local_part, pubkey, relays, visibility, mail_enabled, active
-        from identities
-        where domain = $1 and local_part = any($2::text[]) and active = true and mail_enabled = true
-      `,
-      [domain, localParts],
-    )
-
-    return new Map(result.rows.map((row) => [row.local_part, toIdentity(row)]))
-  }
-
-  async findMailEnabledIdentitiesByPubkeys(domain: string, pubkeys: string[]): Promise<Map<string, UserIdentity>> {
-    if (pubkeys.length === 0) return new Map()
-
-    const result = await this.pool.query<IdentityRow>(
-      `
-        select domain, local_part, pubkey, relays, visibility, mail_enabled, active
-        from identities
-        where domain = $1 and pubkey = any($2::text[]) and active = true and mail_enabled = true
-      `,
-      [domain, pubkeys],
-    )
-
-    return new Map(result.rows.map((row) => [row.pubkey, toIdentity(row)]))
-  }
-
   async listIdentities(search = ''): Promise<AdminIdentity[]> {
     const normalizedSearch = search.trim().toLowerCase()
     const result = normalizedSearch
       ? await this.pool.query<IdentityRow>(
           `
-            select id, domain, local_part, pubkey, relays, visibility, mail_enabled, active, created_at, updated_at
+            select id, domain, local_part, pubkey, visibility, created_at, updated_at
             from identities
             where domain like $1 or local_part like $1 or pubkey like $1
             order by domain asc, local_part asc
@@ -134,7 +111,7 @@ export class PgIdentityRepository implements IdentityRepository, PolicyRepositor
         )
       : await this.pool.query<IdentityRow>(
           `
-            select id, domain, local_part, pubkey, relays, visibility, mail_enabled, active, created_at, updated_at
+            select id, domain, local_part, pubkey, visibility, created_at, updated_at
             from identities
             order by domain asc, local_part asc
             limit 200
@@ -145,71 +122,55 @@ export class PgIdentityRepository implements IdentityRepository, PolicyRepositor
   }
 
   async createIdentity(identity: IdentityInput): Promise<AdminIdentity> {
-    const result = await this.pool.query<IdentityRow>(
-      `
-        insert into identities (domain, local_part, pubkey, relays, visibility, mail_enabled, active)
-        values ($1, $2, $3, $4::jsonb, $5, $6, $7)
-        returning id, domain, local_part, pubkey, relays, visibility, mail_enabled, active, created_at, updated_at
-      `,
-      [
-        identity.domain,
-        identity.localPart,
-        identity.pubkey,
-        JSON.stringify(identity.relays),
-        identity.visibility,
-        identity.mailEnabled,
-        identity.active,
-      ],
-    )
-
-    return toAdminIdentity(result.rows[0])
+    const client = await this.pool.connect()
+    try {
+      await client.query('begin')
+      await client.query('insert into accounts (pubkey) values ($1) on conflict (pubkey) do nothing', [identity.pubkey])
+      const result = await client.query<IdentityRow>(
+        `
+          insert into identities (domain, local_part, pubkey, visibility)
+          values ($1, $2, $3, $4)
+          returning id, domain, local_part, pubkey, visibility, created_at, updated_at
+        `,
+        [identity.domain, identity.localPart, identity.pubkey, identity.visibility],
+      )
+      await client.query('commit')
+      return toAdminIdentity(result.rows[0])
+    } catch (error) {
+      await client.query('rollback')
+      throw error
+    } finally {
+      client.release()
+    }
   }
 
   async updateIdentity(id: string, identity: IdentityInput): Promise<AdminIdentity | null> {
-    const result = await this.pool.query<IdentityRow>(
-      `
-        update identities
-        set domain = $2,
-            local_part = $3,
-            pubkey = $4,
-            relays = $5::jsonb,
-            visibility = $6,
-            mail_enabled = $7,
-            active = $8,
-            updated_at = now()
-        where id = $1
-        returning id, domain, local_part, pubkey, relays, visibility, mail_enabled, active, created_at, updated_at
-      `,
-      [
-        id,
-        identity.domain,
-        identity.localPart,
-        identity.pubkey,
-        JSON.stringify(identity.relays),
-        identity.visibility,
-        identity.mailEnabled,
-        identity.active,
-      ],
-    )
-
-    const row = result.rows[0]
-    return row ? toAdminIdentity(row) : null
-  }
-
-  async setIdentityActive(id: string, active: boolean): Promise<AdminIdentity | null> {
-    const result = await this.pool.query<IdentityRow>(
-      `
-        update identities
-        set active = $2,
-            updated_at = now()
-        where id = $1
-        returning id, domain, local_part, pubkey, relays, visibility, mail_enabled, active, created_at, updated_at
-      `,
-      [id, active],
-    )
-
-    const row = result.rows[0]
-    return row ? toAdminIdentity(row) : null
+    const client = await this.pool.connect()
+    try {
+      await client.query('begin')
+      await client.query('insert into accounts (pubkey) values ($1) on conflict (pubkey) do nothing', [identity.pubkey])
+      const result = await client.query<IdentityRow>(
+        `
+          update identities
+          set domain = $2,
+              local_part = $3,
+              pubkey = $4,
+              visibility = $5,
+              updated_at = now()
+          where id = $1
+          returning id, domain, local_part, pubkey, visibility, created_at, updated_at
+        `,
+        [id, identity.domain, identity.localPart, identity.pubkey, identity.visibility],
+      )
+      await client.query('commit')
+      const row = result.rows[0]
+      return row ? toAdminIdentity(row) : null
+    } catch (error) {
+      await client.query('rollback')
+      throw error
+    } finally {
+      client.release()
+    }
   }
 
   async deleteIdentity(id: string): Promise<boolean> {
@@ -217,21 +178,104 @@ export class PgIdentityRepository implements IdentityRepository, PolicyRepositor
     return (result.rowCount ?? 0) > 0
   }
 
-  async getPlanForPubkey(pubkey: string): Promise<Plan> {
-    const result = await this.pool.query<PlanRow>(
+  async getAccount(pubkey: string): Promise<Account | null> {
+    const result = await this.pool.query<AccountRow>(
       `
-        select p.name, p.per_minute, p.per_hour, p.per_day, p.max_message_bytes, p.max_recipients, p.is_default
-        from plans p
-        left join pubkey_plans pp on pp.plan = p.name and pp.pubkey = $1
-        where pp.pubkey is not null or p.is_default = true
-        order by (pp.pubkey is not null) desc
+        select pubkey, active, mail_enabled, plan, relays, created_at, updated_at
+        from accounts
+        where pubkey = $1
         limit 1
       `,
       [pubkey],
     )
 
     const row = result.rows[0]
-    return row ? toPlan(row) : FREE_PLAN
+    return row ? toAccount(row) : null
+  }
+
+  async getOrCreateAccount(pubkey: string): Promise<Account> {
+    const result = await this.pool.query<AccountRow>(
+      `
+        insert into accounts (pubkey)
+        values ($1)
+        on conflict (pubkey) do update set pubkey = excluded.pubkey
+        returning pubkey, active, mail_enabled, plan, relays, created_at, updated_at
+      `,
+      [pubkey],
+    )
+
+    return toAccount(result.rows[0])
+  }
+
+  async listAccounts(search = ''): Promise<Account[]> {
+    const normalizedSearch = search.trim().toLowerCase()
+    const result = normalizedSearch
+      ? await this.pool.query<AccountRow>(
+          `
+            select pubkey, active, mail_enabled, plan, relays, created_at, updated_at
+            from accounts
+            where pubkey like $1 or coalesce(plan, '') like $1
+            order by updated_at desc
+            limit 200
+          `,
+          [`%${normalizedSearch}%`],
+        )
+      : await this.pool.query<AccountRow>(
+          `
+            select pubkey, active, mail_enabled, plan, relays, created_at, updated_at
+            from accounts
+            order by updated_at desc
+            limit 200
+          `,
+        )
+
+    return result.rows.map(toAccount)
+  }
+
+  async upsertAccount(pubkey: string, input: AccountInput): Promise<Account> {
+    const result = await this.pool.query<AccountRow>(
+      `
+        insert into accounts (pubkey, active, mail_enabled, plan, relays)
+        values ($1, $2, $3, $4, $5::jsonb)
+        on conflict (pubkey) do update set
+          active = excluded.active,
+          mail_enabled = excluded.mail_enabled,
+          plan = excluded.plan,
+          relays = excluded.relays,
+          updated_at = now()
+        returning pubkey, active, mail_enabled, plan, relays, created_at, updated_at
+      `,
+      [pubkey, input.active, input.mailEnabled, input.plan, JSON.stringify(input.relays)],
+    )
+
+    return toAccount(result.rows[0])
+  }
+
+  async deleteAccount(pubkey: string): Promise<boolean> {
+    const result = await this.pool.query('delete from accounts where pubkey = $1', [pubkey])
+    return (result.rowCount ?? 0) > 0
+  }
+
+  async getPlan(name: string | null): Promise<Plan> {
+    if (name) {
+      const named = await this.pool.query<PlanRow>(
+        `
+          select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default
+          from plans where name = $1 limit 1
+        `,
+        [name],
+      )
+      if (named.rows[0]) return toPlan(named.rows[0])
+    }
+
+    const fallback = await this.pool.query<PlanRow>(
+      `
+        select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default
+        from plans where is_default = true limit 1
+      `,
+    )
+
+    return fallback.rows[0] ? toPlan(fallback.rows[0]) : FREE_PLAN
   }
 
   async countOutboundSends(pubkey: string): Promise<OutboundSendCounts> {
@@ -274,7 +318,7 @@ export class PgIdentityRepository implements IdentityRepository, PolicyRepositor
   async listPlans(): Promise<Plan[]> {
     const result = await this.pool.query<PlanRow>(
       `
-        select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, is_default, created_at, updated_at
+        select name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default, created_at, updated_at
         from plans
         order by is_default desc, name asc
       `,
@@ -293,19 +337,29 @@ export class PgIdentityRepository implements IdentityRepository, PolicyRepositor
 
       const result = await client.query<PlanRow>(
         `
-          insert into plans (name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, is_default)
-          values ($1, $2, $3, $4, $5, $6, $7)
+          insert into plans (name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default)
+          values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
           on conflict (name) do update set
             per_minute = excluded.per_minute,
             per_hour = excluded.per_hour,
             per_day = excluded.per_day,
             max_message_bytes = excluded.max_message_bytes,
             max_recipients = excluded.max_recipients,
+            allowed_domains = excluded.allowed_domains,
             is_default = excluded.is_default,
             updated_at = now()
-          returning name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, is_default, created_at, updated_at
+          returning name, per_minute, per_hour, per_day, max_message_bytes, max_recipients, allowed_domains, is_default, created_at, updated_at
         `,
-        [name, limits.perMinute, limits.perHour, limits.perDay, limits.maxMessageBytes, limits.maxRecipients, isDefault],
+        [
+          name,
+          limits.perMinute,
+          limits.perHour,
+          limits.perDay,
+          limits.maxMessageBytes,
+          limits.maxRecipients,
+          JSON.stringify(limits.allowedDomains),
+          isDefault,
+        ],
       )
 
       await client.query('commit')
@@ -323,57 +377,28 @@ export class PgIdentityRepository implements IdentityRepository, PolicyRepositor
     return (result.rowCount ?? 0) > 0
   }
 
-  async getPubkeyPlan(pubkey: string): Promise<string | null> {
-    const result = await this.pool.query<PubkeyPlanRow>('select plan from pubkey_plans where pubkey = $1 limit 1', [pubkey])
-    return result.rows[0]?.plan ?? null
+  async listDomains(): Promise<string[]> {
+    const result = await this.pool.query<{ domain: string }>('select domain from domains order by domain asc')
+    return result.rows.map((row) => row.domain)
   }
 
-  async setPubkeyPlan(pubkey: string, planName: string): Promise<PubkeyPlan | null> {
-    const result = await this.pool.query<PubkeyPlanRow>(
-      `
-        insert into pubkey_plans (pubkey, plan)
-        values ($1, $2)
-        on conflict (pubkey) do update set plan = excluded.plan, updated_at = now()
-        returning pubkey, plan, updated_at
-      `,
-      [pubkey, planName],
-    )
-
-    const row = result.rows[0]
-    return row ? toPubkeyPlan(row) : null
+  async addDomain(domain: string): Promise<string> {
+    await this.pool.query('insert into domains (domain) values ($1) on conflict (domain) do nothing', [domain])
+    return domain
   }
 
-  async clearPubkeyPlan(pubkey: string): Promise<boolean> {
-    const result = await this.pool.query('delete from pubkey_plans where pubkey = $1', [pubkey])
+  async deleteDomain(domain: string): Promise<boolean> {
+    const result = await this.pool.query('delete from domains where domain = $1', [domain])
     return (result.rowCount ?? 0) > 0
-  }
-
-  async listPubkeyPlans(search = ''): Promise<PubkeyPlan[]> {
-    const normalizedSearch = search.trim().toLowerCase()
-    const result = normalizedSearch
-      ? await this.pool.query<PubkeyPlanRow>(
-          `
-            select pubkey, plan, updated_at from pubkey_plans
-            where pubkey like $1 or plan like $1
-            order by updated_at desc
-            limit 200
-          `,
-          [`%${normalizedSearch}%`],
-        )
-      : await this.pool.query<PubkeyPlanRow>(
-          `
-            select pubkey, plan, updated_at from pubkey_plans
-            order by updated_at desc
-            limit 200
-          `,
-        )
-
-    return result.rows.map(toPubkeyPlan)
   }
 
   async close(): Promise<void> {
     await this.pool.end()
   }
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
 }
 
 function toPlan(row: PlanRow): Plan {
@@ -384,31 +409,31 @@ function toPlan(row: PlanRow): Plan {
     perDay: Number(row.per_day),
     maxMessageBytes: Number(row.max_message_bytes),
     maxRecipients: Number(row.max_recipients),
+    allowedDomains: toStringArray(row.allowed_domains),
     isDefault: row.is_default,
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
   }
 }
 
-function toPubkeyPlan(row: PubkeyPlanRow): PubkeyPlan {
+function toAccount(row: AccountRow): Account {
   return {
     pubkey: row.pubkey,
+    active: row.active,
+    mailEnabled: row.mail_enabled,
     plan: row.plan,
+    relays: toStringArray(row.relays),
+    createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
   }
 }
 
 function toIdentity(row: IdentityRow): UserIdentity {
-  const relays = Array.isArray(row.relays) ? row.relays.filter((relay): relay is string => typeof relay === 'string') : []
-
   return {
     domain: row.domain,
     localPart: row.local_part,
     pubkey: row.pubkey,
-    relays,
     visibility: row.visibility,
-    mailEnabled: row.mail_enabled,
-    active: row.active,
   }
 }
 

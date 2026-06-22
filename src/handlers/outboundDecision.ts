@@ -1,19 +1,24 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { parseEmailAddress } from '../email.js'
-import { decodeNpub } from '../nostr.js'
-import { countRecipients, isRateLimited, messageByteSize } from '../policy.js'
+import { decodeBase36Pubkey, decodeNpub } from '../nostr.js'
+import { countRecipients, isDomainAllowed, isRateLimited, messageByteSize } from '../policy.js'
 import type {
-  AppConfig,
+  AccountRepository,
+  DomainRepository,
   IdentityRepository,
   OutboundDecisionPayload,
   OutboundDecisionResponse,
   PolicyRepository,
 } from '../types.js'
-import { isAuthorizedDecisionRequest, resolveRecipientPubkey } from './inboundDecision.js'
+import { isAuthorizedDecisionRequest } from './inboundDecision.js'
+
+type OutboundRepository = IdentityRepository & AccountRepository & PolicyRepository & DomainRepository
+
+type Ownership = 'alias' | 'encoded' | 'denied'
 
 export function createOutboundDecisionHandler(
-  repo: IdentityRepository & PolicyRepository,
-  config: Pick<AppConfig, 'protectedEmailDomains'> & { outboundDecisionToken: string },
+  repo: OutboundRepository,
+  config: { outboundDecisionToken: string },
 ) {
   return async function outboundDecisionHandler(request: FastifyRequest, reply: FastifyReply) {
     if (!isAuthorizedDecisionRequest(request, config.outboundDecisionToken, 'x-outbound-decision-token')) {
@@ -26,7 +31,8 @@ export function createOutboundDecisionHandler(
     }
 
     try {
-      const decision = await decideSending(payload, repo, config.protectedEmailDomains)
+      const domains = new Set(await repo.listDomains())
+      const decision = await decideSending(payload, repo, domains)
       return reply.send(decision)
     } catch (error) {
       request.log.error({ error }, 'Outbound decision lookup failed')
@@ -37,8 +43,8 @@ export function createOutboundDecisionHandler(
 
 export async function decideSending(
   payload: OutboundDecisionPayload,
-  repo: IdentityRepository & PolicyRepository,
-  protectedEmailDomains: Set<string>,
+  repo: OutboundRepository,
+  domains: Set<string>,
 ): Promise<OutboundDecisionResponse> {
   const sender = normalizePubkey(payload.nostrSender)
   if (!sender) return denyUnauthorizedSender()
@@ -47,23 +53,25 @@ export async function decideSending(
   if (!fromHeader) return denyUnauthorizedSender()
 
   const parsed = parseEmailAddress(fromHeader)
-  if (!parsed || !protectedEmailDomains.has(parsed.domain)) return denyUnauthorizedSender()
+  if (!parsed || !domains.has(parsed.domain)) return denyUnauthorizedSender()
 
-  const pubkey = await resolveRecipientPubkey(parsed.domain, parsed.localPart, repo)
-  if (pubkey !== sender) return denyUnauthorizedSender()
-
-  const identities = await repo.findMailEnabledIdentitiesByPubkeys(parsed.domain, [sender])
-  if (!identities.has(sender)) return denyUnauthorizedSender()
+  const ownership = await resolveOwnership(parsed.domain, parsed.localPart, sender, repo)
+  if (ownership === 'denied') return denyUnauthorizedSender()
 
   const giftWrapId = typeof payload.giftWrapId === 'string' ? payload.giftWrapId.trim() : ''
 
-  // Re-asking about an already-recorded message is idempotent: it was allowed and
-  // counted once, so the bridge can safely retry without burning another slot.
   if (giftWrapId && (await repo.hasOutboundSend(giftWrapId))) {
     return { decision: 'allow' }
   }
 
-  const plan = await repo.getPlanForPubkey(sender)
+  const account = await repo.getOrCreateAccount(sender)
+  if (!account.active || !account.mailEnabled) return denyAccountDisabled()
+
+  const plan = await repo.getPlan(account.plan)
+
+  if (ownership === 'encoded' && !isDomainAllowed(plan, parsed.domain)) {
+    return denyDomainNotAllowed(parsed.domain)
+  }
 
   const recipients = countRecipients(payload.headers)
   if (recipients > plan.maxRecipients) return denyTooManyRecipients(plan.maxRecipients)
@@ -79,6 +87,30 @@ export async function decideSending(
   await repo.recordOutboundSend(sender, giftWrapId || undefined)
 
   return { decision: 'allow' }
+}
+
+async function resolveOwnership(
+  domain: string,
+  localPart: string,
+  sender: string,
+  repo: IdentityRepository,
+): Promise<Ownership> {
+  const alias = await repo.findIdentity(domain, localPart)
+  if (alias) return alias.pubkey === sender ? 'alias' : 'denied'
+
+  const decoded = decodeEncodedLocalPart(localPart)
+  if (decoded && decoded === sender) return 'encoded'
+
+  return 'denied'
+}
+
+function decodeEncodedLocalPart(localPart: string): string | null {
+  if (/^[0-9a-f]{64}$/.test(localPart)) return localPart
+
+  const npub = decodeNpub(localPart)
+  if (npub) return npub
+
+  return decodeBase36Pubkey(localPart)
 }
 
 function parseDecisionPayload(value: unknown): OutboundDecisionPayload | null {
@@ -117,6 +149,22 @@ function denyUnauthorizedSender(): OutboundDecisionResponse {
     decision: 'deny',
     reason: 'unauthorized_sender',
     message: 'Sender is not authorized to send mail from this address',
+  }
+}
+
+function denyAccountDisabled(): OutboundDecisionResponse {
+  return {
+    decision: 'deny',
+    reason: 'account_disabled',
+    message: 'This account is not allowed to send mail',
+  }
+}
+
+function denyDomainNotAllowed(domain: string): OutboundDecisionResponse {
+  return {
+    decision: 'deny',
+    reason: 'domain_not_allowed',
+    message: `Your plan cannot send from ${domain}`,
   }
 }
 

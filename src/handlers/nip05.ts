@@ -1,12 +1,12 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { normalizeDomain, normalizeLocalPart } from '../email.js'
-import type { IdentityRepository, Nip05Response } from '../types.js'
+import type { AccountRepository, IdentityRepository, Nip05Response } from '../types.js'
 
 interface Nip05Query {
   name?: string
 }
 
-export function createNip05Handler(repo: IdentityRepository) {
+export function createNip05Handler(repo: IdentityRepository & AccountRepository) {
   return async function nip05Handler(request: FastifyRequest<{ Querystring: Nip05Query }>, reply: FastifyReply) {
     const name = normalizeLocalPart(request.query.name ?? '')
     const domain = normalizeDomain(request.headers.host ?? '')
@@ -22,9 +22,11 @@ export function createNip05Handler(repo: IdentityRepository) {
       return reply.send(emptyNip05Response())
     }
 
+    const account = await repo.getAccount(identity.pubkey)
+
     return reply.send({
       names: { [name]: identity.pubkey },
-      relays: { [identity.pubkey]: identity.relays },
+      relays: { [identity.pubkey]: account?.relays ?? [] },
     } satisfies Nip05Response)
   }
 }

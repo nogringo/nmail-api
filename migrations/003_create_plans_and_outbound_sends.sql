@@ -5,6 +5,7 @@ create table if not exists plans (
   per_day integer not null,
   max_message_bytes bigint not null,
   max_recipients integer not null,
+  allowed_domains jsonb not null default '[]'::jsonb,
   is_default boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -13,10 +14,11 @@ create table if not exists plans (
   constraint plans_per_hour_positive check (per_hour >= 0),
   constraint plans_per_day_positive check (per_day >= 0),
   constraint plans_max_message_bytes_positive check (max_message_bytes >= 0),
-  constraint plans_max_recipients_positive check (max_recipients >= 0)
+  constraint plans_max_recipients_positive check (max_recipients >= 0),
+  constraint plans_allowed_domains_array check (jsonb_typeof(allowed_domains) = 'array')
 );
 
--- At most one plan can be the fallback applied to pubkeys without an assignment.
+-- At most one plan can be the fallback applied to accounts without a plan.
 create unique index if not exists plans_single_default_idx
   on plans (is_default)
   where is_default;
@@ -27,14 +29,22 @@ values
   ('premium', 10, 100, 500, 26214400, 10, false)
 on conflict (name) do nothing;
 
-create table if not exists pubkey_plans (
-  pubkey char(64) not null primary key,
-  plan text not null references plans (name) on update cascade on delete restrict,
+-- accounts: one row per pubkey (the user). Holds person-level state. A row is
+-- only needed to override the open-service defaults (active, mail enabled,
+-- default plan); a missing account behaves as those defaults.
+create table if not exists accounts (
+  pubkey char(64) primary key,
+  active boolean not null default true,
+  mail_enabled boolean not null default true,
+  plan text references plans (name) on update cascade on delete set null,
+  relays jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint pubkey_plans_pubkey_hex check (pubkey ~ '^[0-9a-f]{64}$')
+  constraint accounts_pubkey_hex check (pubkey ~ '^[0-9a-f]{64}$'),
+  constraint accounts_relays_array check (jsonb_typeof(relays) = 'array')
 );
 
-create index if not exists pubkey_plans_plan_idx on pubkey_plans (plan);
+create index if not exists accounts_plan_idx on accounts (plan);
 
 create table if not exists outbound_sends (
   id bigserial primary key,

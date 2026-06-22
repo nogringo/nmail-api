@@ -15,7 +15,6 @@ const basePayload: OutboundDecisionPayload = {
 }
 
 const appConfig = {
-  protectedEmailDomains: new Set(['nmail.li']),
   inboundDecisionToken: 'inbound-token',
   outboundDecisionToken: 'outbound-token',
 }
@@ -101,9 +100,10 @@ test('Outbound decision denies when the sender pubkey does not own the From addr
   await app.close()
 })
 
-test('Outbound decision denies identities with mail disabled', async () => {
+test('Outbound decision denies when the account has mail disabled', async () => {
   const repo = new MemoryIdentityRepository()
-  repo.add(identity({ localPart: 'alice', pubkey: SENDER, mailEnabled: false }))
+  repo.add(identity({ localPart: 'alice', pubkey: SENDER }))
+  repo.setAccount(SENDER, { mailEnabled: false })
   const app = await buildApp(repo, appConfig)
 
   const response = await app.inject({
@@ -114,7 +114,8 @@ test('Outbound decision denies identities with mail disabled', async () => {
   })
 
   assert.equal(response.statusCode, 200)
-  assert.deepEqual(response.json(), deniedSender)
+  assert.equal(response.json().decision, 'deny')
+  assert.equal(response.json().reason, 'account_disabled')
 
   await app.close()
 })

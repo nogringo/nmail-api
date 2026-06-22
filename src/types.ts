@@ -1,7 +1,6 @@
 export interface AppConfig {
   port: number
   databaseUrl: string
-  protectedEmailDomains: Set<string>
   inboundDecisionToken: string
   outboundDecisionToken?: string
   outboundMaxBodyBytes: number
@@ -10,14 +9,32 @@ export interface AppConfig {
 
 export type IdentityVisibility = 'public' | 'private'
 
+// An account is the user, keyed by its nostr pubkey. It owns everything that is
+// a property of the person rather than of a single address.
+export interface Account {
+  pubkey: string
+  active: boolean
+  mailEnabled: boolean
+  plan: string | null // null means "use the default plan"
+  relays: string[]
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface AccountInput {
+  active: boolean
+  mailEnabled: boolean
+  plan: string | null
+  relays: string[]
+}
+
+// An identity is a human-readable alias pointing at a pubkey. It only carries
+// what is specific to the name itself.
 export interface UserIdentity {
   domain: string
   localPart: string
   pubkey: string
-  relays: string[]
   visibility: IdentityVisibility
-  mailEnabled: boolean
-  active: boolean
 }
 
 export interface AdminIdentity extends UserIdentity {
@@ -30,23 +47,31 @@ export interface IdentityInput {
   domain: string
   localPart: string
   pubkey: string
-  relays: string[]
   visibility: IdentityVisibility
-  mailEnabled: boolean
-  active: boolean
 }
 
 export interface IdentityRepository {
   findIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
   findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
-  findMailEnabledIdentities(domain: string, localParts: string[]): Promise<Map<string, UserIdentity>>
-  findMailEnabledIdentitiesByPubkeys(domain: string, pubkeys: string[]): Promise<Map<string, UserIdentity>>
   listIdentities?(search?: string): Promise<AdminIdentity[]>
   createIdentity?(identity: IdentityInput): Promise<AdminIdentity>
   updateIdentity?(id: string, identity: IdentityInput): Promise<AdminIdentity | null>
-  setIdentityActive?(id: string, active: boolean): Promise<AdminIdentity | null>
   deleteIdentity?(id: string): Promise<boolean>
   close?(): Promise<void>
+}
+
+export interface DomainRepository {
+  listDomains(): Promise<string[]>
+  addDomain?(domain: string): Promise<string>
+  deleteDomain?(domain: string): Promise<boolean>
+}
+
+export interface AccountRepository {
+  getAccount(pubkey: string): Promise<Account | null>
+  getOrCreateAccount(pubkey: string): Promise<Account>
+  listAccounts?(search?: string): Promise<Account[]>
+  upsertAccount?(pubkey: string, input: AccountInput): Promise<Account>
+  deleteAccount?(pubkey: string): Promise<boolean>
 }
 
 export interface PlanLimits {
@@ -55,18 +80,13 @@ export interface PlanLimits {
   perDay: number
   maxMessageBytes: number
   maxRecipients: number
+  allowedDomains: string[]
 }
 
 export interface Plan extends PlanLimits {
   name: string
   isDefault: boolean
   createdAt?: string
-  updatedAt?: string
-}
-
-export interface PubkeyPlan {
-  pubkey: string
-  plan: string
   updatedAt?: string
 }
 
@@ -77,17 +97,13 @@ export interface OutboundSendCounts {
 }
 
 export interface PolicyRepository {
-  getPlanForPubkey(pubkey: string): Promise<Plan>
+  getPlan(name: string | null): Promise<Plan>
   countOutboundSends(pubkey: string): Promise<OutboundSendCounts>
   recordOutboundSend(pubkey: string, giftWrapId?: string): Promise<void>
   hasOutboundSend(giftWrapId: string): Promise<boolean>
   listPlans?(): Promise<Plan[]>
   upsertPlan?(name: string, limits: PlanLimits, isDefault: boolean): Promise<Plan>
   deletePlan?(name: string): Promise<boolean>
-  getPubkeyPlan?(pubkey: string): Promise<string | null>
-  setPubkeyPlan?(pubkey: string, planName: string): Promise<PubkeyPlan | null>
-  clearPubkeyPlan?(pubkey: string): Promise<boolean>
-  listPubkeyPlans?(search?: string): Promise<PubkeyPlan[]>
 }
 
 export interface InboundDecisionPayload {

@@ -1,3 +1,4 @@
+import { normalizeDomain } from './email.js'
 import type { OutboundSendCounts, Plan, PlanLimits } from './types.js'
 
 const MB = 1024 * 1024
@@ -11,6 +12,7 @@ export const FREE_PLAN: Plan = {
   perDay: 50,
   maxMessageBytes: 10 * MB,
   maxRecipients: 5,
+  allowedDomains: [],
   isDefault: true,
 }
 
@@ -21,6 +23,7 @@ export const PREMIUM_PLAN: Plan = {
   perDay: 500,
   maxMessageBytes: 25 * MB,
   maxRecipients: 10,
+  allowedDomains: [],
   isDefault: false,
 }
 
@@ -32,6 +35,10 @@ export function isRateLimited(counts: OutboundSendCounts, limits: PlanLimits): b
     counts.hour >= limits.perHour ||
     counts.day >= limits.perDay
   )
+}
+
+export function isDomainAllowed(plan: PlanLimits, domain: string): boolean {
+  return plan.allowedDomains.length === 0 || plan.allowedDomains.includes(domain)
 }
 
 export function messageByteSize(rawMime: string | undefined): number {
@@ -90,18 +97,40 @@ export function sanitizePlanLimits(value: unknown): PlanLimits | null {
   const perDay = toCount(input.perDay)
   const maxMessageBytes = toBytes(input.maxMessageBytes)
   const maxRecipients = toCount(input.maxRecipients)
+  const allowedDomains = toDomainList(input.allowedDomains)
 
   if (
     perMinute === null ||
     perHour === null ||
     perDay === null ||
     maxMessageBytes === null ||
-    maxRecipients === null
+    maxRecipients === null ||
+    allowedDomains === null
   ) {
     return null
   }
 
-  return { perMinute, perHour, perDay, maxMessageBytes, maxRecipients }
+  return { perMinute, perHour, perDay, maxMessageBytes, maxRecipients, allowedDomains }
+}
+
+function toDomainList(value: unknown): string[] | null {
+  if (value === undefined || value === null) return []
+
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[\s,]+/)
+      : null
+  if (!raw) return null
+
+  const domains = new Set<string>()
+  for (const entry of raw) {
+    if (typeof entry !== 'string') return null
+    const domain = normalizeDomain(entry)
+    if (domain) domains.add(domain)
+  }
+
+  return [...domains]
 }
 
 export function normalizePlanName(value: unknown): string {

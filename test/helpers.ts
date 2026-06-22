@@ -1,13 +1,16 @@
 import { DEFAULT_PLANS, FREE_PLAN } from '../src/policy.js'
 import type {
+  Account,
+  AccountInput,
+  AccountRepository,
   AdminIdentity,
+  DomainRepository,
   IdentityInput,
   IdentityRepository,
   OutboundSendCounts,
   Plan,
   PlanLimits,
   PolicyRepository,
-  PubkeyPlan,
   UserIdentity,
 } from '../src/types.js'
 
@@ -17,19 +20,33 @@ interface SendEntry {
   at: number
 }
 
-export class MemoryIdentityRepository implements IdentityRepository, PolicyRepository {
+export class MemoryIdentityRepository implements IdentityRepository, AccountRepository, PolicyRepository, DomainRepository {
   readonly identities = new Map<string, AdminIdentity>()
+  readonly accounts = new Map<string, Account>()
   readonly plans = new Map<string, Plan>(DEFAULT_PLANS.map((plan) => [plan.name, { ...plan }]))
-  readonly pubkeyPlans = new Map<string, PubkeyPlan>()
+  readonly domains = new Set<string>()
   readonly sends: SendEntry[] = []
   fail = false
   private nextId = 1
 
   add(identity: UserIdentity): void {
-    this.identities.set(
-      key(identity.domain, identity.localPart),
-      toAdminIdentity(String(this.nextId++), identity),
-    )
+    this.ensureAccount(identity.pubkey)
+    this.domains.add(identity.domain)
+    this.identities.set(key(identity.domain, identity.localPart), toAdminIdentity(String(this.nextId++), identity))
+  }
+
+  setAccount(pubkey: string, overrides: Partial<AccountInput> = {}): Account {
+    const account: Account = {
+      pubkey,
+      active: overrides.active ?? true,
+      mailEnabled: overrides.mailEnabled ?? true,
+      plan: overrides.plan ?? null,
+      relays: overrides.relays ?? [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    this.accounts.set(pubkey, account)
+    return account
   }
 
   async findIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
@@ -42,34 +59,10 @@ export class MemoryIdentityRepository implements IdentityRepository, PolicyRepos
     if (this.fail) throw new Error('database unavailable')
 
     const identity = this.identities.get(key(domain, localPart))
-    return identity?.active && identity.visibility === 'public' ? identity : null
-  }
+    if (!identity || identity.visibility !== 'public') return null
 
-  async findMailEnabledIdentities(domain: string, localParts: string[]): Promise<Map<string, UserIdentity>> {
-    if (this.fail) throw new Error('database unavailable')
-
-    const found = new Map<string, UserIdentity>()
-    for (const localPart of localParts) {
-      const identity = this.identities.get(key(domain, localPart))
-      if (identity?.active && identity.mailEnabled) found.set(localPart, identity)
-    }
-
-    return found
-  }
-
-  async findMailEnabledIdentitiesByPubkeys(domain: string, pubkeys: string[]): Promise<Map<string, UserIdentity>> {
-    if (this.fail) throw new Error('database unavailable')
-
-    const requiredPubkeys = new Set(pubkeys)
-    const found = new Map<string, UserIdentity>()
-
-    for (const identity of this.identities.values()) {
-      if (identity.domain === domain && requiredPubkeys.has(identity.pubkey) && identity.active && identity.mailEnabled) {
-        found.set(identity.pubkey, identity)
-      }
-    }
-
-    return found
+    const account = this.accounts.get(identity.pubkey)
+    return !account || account.active ? identity : null
   }
 
   async listIdentities(search = ''): Promise<AdminIdentity[]> {
@@ -92,6 +85,7 @@ export class MemoryIdentityRepository implements IdentityRepository, PolicyRepos
       throw Object.assign(new Error('duplicate'), { code: '23505', constraint: 'identities_unique_name' })
     }
 
+    this.ensureAccount(input.pubkey)
     this.identities.set(identityKey, identity)
     return identity
   }
@@ -108,17 +102,9 @@ export class MemoryIdentityRepository implements IdentityRepository, PolicyRepos
       throw Object.assign(new Error('duplicate'), { code: '23505', constraint: 'identities_unique_name' })
     }
 
+    this.ensureAccount(input.pubkey)
     this.identities.delete(oldKey)
     this.identities.set(newKey, next)
-    return next
-  }
-
-  async setIdentityActive(id: string, active: boolean): Promise<AdminIdentity | null> {
-    const current = this.findById(id)
-    if (!current) return null
-
-    const next = { ...current, active, updatedAt: new Date().toISOString() }
-    this.identities.set(key(next.domain, next.localPart), next)
     return next
   }
 
@@ -130,12 +116,38 @@ export class MemoryIdentityRepository implements IdentityRepository, PolicyRepos
     return true
   }
 
-  async getPlanForPubkey(pubkey: string): Promise<Plan> {
+  async getAccount(pubkey: string): Promise<Account | null> {
     if (this.fail) throw new Error('database unavailable')
 
-    const assigned = this.pubkeyPlans.get(pubkey)
-    if (assigned) {
-      const plan = this.plans.get(assigned.plan)
+    return this.accounts.get(pubkey) ?? null
+  }
+
+  async getOrCreateAccount(pubkey: string): Promise<Account> {
+    if (this.fail) throw new Error('database unavailable')
+
+    return this.accounts.get(pubkey) ?? this.ensureAccount(pubkey)
+  }
+
+  async listAccounts(search = ''): Promise<Account[]> {
+    const normalizedSearch = search.trim().toLowerCase()
+    return [...this.accounts.values()]
+      .filter((account) => !normalizedSearch || account.pubkey.includes(normalizedSearch) || (account.plan ?? '').includes(normalizedSearch))
+      .map((account) => ({ ...account }))
+  }
+
+  async upsertAccount(pubkey: string, input: AccountInput): Promise<Account> {
+    return this.setAccount(pubkey, input)
+  }
+
+  async deleteAccount(pubkey: string): Promise<boolean> {
+    return this.accounts.delete(pubkey)
+  }
+
+  async getPlan(name: string | null): Promise<Plan> {
+    if (this.fail) throw new Error('database unavailable')
+
+    if (name) {
+      const plan = this.plans.get(name)
       if (plan) return { ...plan }
     }
 
@@ -194,25 +206,25 @@ export class MemoryIdentityRepository implements IdentityRepository, PolicyRepos
     return this.plans.delete(name)
   }
 
-  async getPubkeyPlan(pubkey: string): Promise<string | null> {
-    return this.pubkeyPlans.get(pubkey)?.plan ?? null
+  async listDomains(): Promise<string[]> {
+    if (this.fail) throw new Error('database unavailable')
+
+    return [...this.domains].sort()
   }
 
-  async setPubkeyPlan(pubkey: string, planName: string): Promise<PubkeyPlan | null> {
-    const entry: PubkeyPlan = { pubkey, plan: planName, updatedAt: new Date().toISOString() }
-    this.pubkeyPlans.set(pubkey, entry)
-    return { ...entry }
+  async addDomain(domain: string): Promise<string> {
+    this.domains.add(domain)
+    return domain
   }
 
-  async clearPubkeyPlan(pubkey: string): Promise<boolean> {
-    return this.pubkeyPlans.delete(pubkey)
+  async deleteDomain(domain: string): Promise<boolean> {
+    return this.domains.delete(domain)
   }
 
-  async listPubkeyPlans(search = ''): Promise<PubkeyPlan[]> {
-    const normalizedSearch = search.trim().toLowerCase()
-    return [...this.pubkeyPlans.values()]
-      .filter((entry) => !normalizedSearch || entry.pubkey.includes(normalizedSearch) || entry.plan.includes(normalizedSearch))
-      .map((entry) => ({ ...entry }))
+  private ensureAccount(pubkey: string): Account {
+    const existing = this.accounts.get(pubkey)
+    if (existing) return existing
+    return this.setAccount(pubkey)
   }
 
   private findById(id: string): AdminIdentity | null {
@@ -225,10 +237,7 @@ export function identity(overrides: Partial<UserIdentity> = {}): UserIdentity {
     domain: 'nmail.li',
     localPart: 'alice',
     pubkey: '0'.repeat(64),
-    relays: ['wss://relay.damus.io'],
     visibility: 'public',
-    mailEnabled: true,
-    active: true,
     ...overrides,
   }
 }
@@ -240,8 +249,11 @@ function key(domain: string, localPart: string): string {
 function toAdminIdentity(id: string, identity: UserIdentity): AdminIdentity {
   const now = new Date().toISOString()
   return {
-    ...identity,
     id,
+    domain: identity.domain,
+    localPart: identity.localPart,
+    pubkey: identity.pubkey,
+    visibility: identity.visibility,
     createdAt: now,
     updatedAt: now,
   }
