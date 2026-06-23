@@ -318,7 +318,7 @@ export class PgIdentityRepository implements IdentityRepository, AccountReposito
       `
         insert into outbound_sends (pubkey, gift_wrap_id)
         values ($1, $2)
-        on conflict (gift_wrap_id) do nothing
+        on conflict (gift_wrap_id) where gift_wrap_id is not null do nothing
       `,
       [pubkey, giftWrapId ?? null],
     )
