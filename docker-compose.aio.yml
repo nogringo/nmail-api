@@ -7,11 +7,10 @@ services:
         condition: service_healthy
     ports:
       - "${PORT:-3000}:3000"
+    env_file:
+      - .env
     environment:
-      PORT: 3000
       DATABASE_URL: postgres://nmail:${POSTGRES_PASSWORD:-nmail}@postgres:5432/nmail
-      INBOUND_DECISION_TOKEN: ${INBOUND_DECISION_TOKEN:?Set INBOUND_DECISION_TOKEN}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
 
   postgres:
     image: postgres:18-alpine
