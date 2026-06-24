@@ -156,6 +156,28 @@ test('Claim rejects a too-short local part', async () => {
   await app.close()
 })
 
+test('Claim rejects a local part with non-NIP-05 or repeated/edge separators', async () => {
+  const { app } = await buildClaimApp()
+
+  for (const local of ['moi__.....---', 'bad+name', '.leading', 'trailing-', 'a..b.cd']) {
+    const response = await claim(app, claimEvent({ address: `${local}@${domain}` }).event)
+    assert.equal(response.statusCode, 400, local)
+    assert.equal(response.json().error, 'invalid_local_part', local)
+  }
+
+  await app.close()
+})
+
+test('Claim accepts a clean local part with single separators', async () => {
+  const { app } = await buildClaimApp()
+  const response = await claim(app, claimEvent({ address: `moi.cool-42@${domain}` }).event)
+
+  assert.equal(response.statusCode, 201)
+  assert.equal(response.json().alias.localPart, 'moi.cool-42')
+
+  await app.close()
+})
+
 test('Claim rejects pubkey-encoded local parts (too long to be aliases)', async () => {
   const { app } = await buildClaimApp()
   const hex64 = 'a'.repeat(64)

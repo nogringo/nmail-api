@@ -14,6 +14,10 @@ export const CLAIM_MAX_AGE_SECONDS = 300
 export const ALIAS_LOCAL_PART_MIN = 6
 export const ALIAS_LOCAL_PART_MAX = 47
 
+// NIP-05 allows a-z0-9-_. ; we go stricter: separators only between alphanumerics
+// (no leading/trailing or repeated . _ -). Local part is already lowercased.
+export const ALIAS_LOCAL_PART = /^[a-z0-9]+([._-][a-z0-9]+)*$/
+
 export type ClaimReason =
   | 'invalid_event'
   | 'invalid_signature'
@@ -56,6 +60,10 @@ export function verifyClaimEvent(value: unknown, nowSeconds: number): ClaimResul
   if (!parsed) return fail('invalid_address')
 
   if (parsed.localPart.length < ALIAS_LOCAL_PART_MIN || parsed.localPart.length > ALIAS_LOCAL_PART_MAX) {
+    return fail('invalid_local_part')
+  }
+
+  if (!ALIAS_LOCAL_PART.test(parsed.localPart)) {
     return fail('invalid_local_part')
   }
 
