@@ -18,12 +18,23 @@ export const ALIAS_LOCAL_PART_MAX = 47
 // (no leading/trailing or repeated . _ -). Local part is already lowercased.
 export const ALIAS_LOCAL_PART = /^[a-z0-9]+([._-][a-z0-9]+)*$/
 
+// Role and system mailboxes that must not be user-claimable (RFC 2142 plus
+// common service addresses). Matched with separators stripped, so post-master,
+// no.reply, etc. cannot slip through. The admin path can still provision these.
+export const RESERVED_LOCAL_PARTS = new Set([
+  'abuse', 'admin', 'administrator', 'billing', 'contact', 'daemon', 'help',
+  'hostmaster', 'info', 'legal', 'mail', 'mailerdaemon', 'marketing', 'noc',
+  'noreply', 'nostr', 'postmaster', 'privacy', 'root', 'sales', 'security',
+  'spam', 'support', 'sysadmin', 'usenet', 'uucp', 'webmaster', 'www',
+])
+
 export type ClaimReason =
   | 'invalid_event'
   | 'invalid_signature'
   | 'stale_event'
   | 'invalid_address'
   | 'invalid_local_part'
+  | 'reserved_local_part'
   | 'invalid_visibility'
 
 export type VerifiedClaim = {
@@ -58,6 +69,10 @@ export function verifyClaimEvent(value: unknown, nowSeconds: number): ClaimResul
 
   const parsed = parseEmailAddress(address)
   if (!parsed) return fail('invalid_address')
+
+  if (RESERVED_LOCAL_PARTS.has(parsed.localPart.replace(/[._-]/g, ''))) {
+    return fail('reserved_local_part')
+  }
 
   if (parsed.localPart.length < ALIAS_LOCAL_PART_MIN || parsed.localPart.length > ALIAS_LOCAL_PART_MAX) {
     return fail('invalid_local_part')

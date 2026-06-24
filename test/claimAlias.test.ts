@@ -178,6 +178,18 @@ test('Claim accepts a clean local part with single separators', async () => {
   await app.close()
 })
 
+test('Claim rejects reserved role local parts including separator variants', async () => {
+  const { app } = await buildClaimApp()
+
+  for (const local of ['postmaster', 'noreply', 'contact', 'abuse', 'post.master', 'no-reply']) {
+    const response = await claim(app, claimEvent({ address: `${local}@${domain}` }).event)
+    assert.equal(response.statusCode, 400, local)
+    assert.equal(response.json().error, 'reserved_local_part', local)
+  }
+
+  await app.close()
+})
+
 test('Claim rejects pubkey-encoded local parts (too long to be aliases)', async () => {
   const { app } = await buildClaimApp()
   const hex64 = 'a'.repeat(64)
