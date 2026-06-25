@@ -5,6 +5,8 @@ export interface AppConfig {
   outboundDecisionToken?: string
   outboundMaxBodyBytes: number
   adminPassword?: string
+  roleWebhookSigningKey?: string
+  roleWebhookMaxBodyBytes: number
 }
 
 export type IdentityVisibility = 'public' | 'private'
@@ -150,4 +152,37 @@ export type OutboundDecisionResponse =
 export interface Nip05Response {
   names: Record<string, string>
   relays: Record<string, string[]>
+}
+
+// Mail addressed to a role mailbox (abuse@, postmaster@, ...) received from the
+// haraka-webhook role webhook and stored for the operator to read in /admin.
+export interface RoleMessageInput {
+  recipient: string
+  sender: string
+  from: string
+  subject: string
+  headers: unknown
+  bodyMime: string
+  contentHash: string
+}
+
+export interface RoleMessageSummary {
+  id: string
+  recipient: string
+  sender: string
+  from: string
+  subject: string
+  receivedAt: string
+}
+
+export interface RoleMessage extends RoleMessageSummary {
+  headers: unknown
+  bodyMime: string
+}
+
+export interface RoleMessageRepository {
+  recordRoleMessage(input: RoleMessageInput): Promise<void>
+  listRoleMessages?(search?: string): Promise<RoleMessageSummary[]>
+  getRoleMessage?(id: string): Promise<RoleMessage | null>
+  deleteRoleMessage?(id: string): Promise<boolean>
 }

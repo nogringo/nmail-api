@@ -13,8 +13,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databaseUrl,
     inboundDecisionToken,
     outboundDecisionToken: parseOptionalSecret(env.OUTBOUND_DECISION_TOKEN),
-    outboundMaxBodyBytes: parseOutboundMaxBodyBytes(env.OUTBOUND_MAX_BODY_BYTES),
+    outboundMaxBodyBytes: parseMaxBodyBytes(env.OUTBOUND_MAX_BODY_BYTES, 'OUTBOUND_MAX_BODY_BYTES'),
     adminPassword: parseOptionalSecret(env.ADMIN_PASSWORD),
+    roleWebhookSigningKey: parseOptionalSecret(env.WEBHOOK_SIGNING_KEY),
+    roleWebhookMaxBodyBytes: parseMaxBodyBytes(env.ROLE_WEBHOOK_MAX_BODY_BYTES, 'ROLE_WEBHOOK_MAX_BODY_BYTES'),
   }
 }
 
@@ -29,13 +31,13 @@ function parsePort(value: string | undefined): number {
   return port
 }
 
-function parseOutboundMaxBodyBytes(value: string | undefined): number {
+function parseMaxBodyBytes(value: string | undefined, name: string): number {
   const defaultBytes = 32 * 1024 * 1024
   if (!value) return defaultBytes
 
   const bytes = Number(value)
   if (!Number.isInteger(bytes) || bytes <= 0) {
-    throw new Error('OUTBOUND_MAX_BODY_BYTES must be a positive integer')
+    throw new Error(`${name} must be a positive integer`)
   }
 
   return bytes

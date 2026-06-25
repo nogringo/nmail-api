@@ -13,6 +13,10 @@ import type {
   Plan,
   PlanLimits,
   PolicyRepository,
+  RoleMessage,
+  RoleMessageInput,
+  RoleMessageRepository,
+  RoleMessageSummary,
   UserIdentity,
 } from './types.js'
 
@@ -58,7 +62,20 @@ interface SendCountsRow {
   per_day: number | string
 }
 
-export class PgIdentityRepository implements IdentityRepository, AccountRepository, PolicyRepository, DomainRepository {
+interface RoleMessageRow {
+  id: number | string
+  recipient: string
+  sender: string
+  from_addr: string
+  subject: string
+  headers?: unknown
+  body_mime?: string
+  received_at?: Date | string
+}
+
+export class PgIdentityRepository
+  implements IdentityRepository, AccountRepository, PolicyRepository, DomainRepository, RoleMessageRepository
+{
   private readonly pool: pg.Pool
 
   constructor(databaseUrl: string) {
@@ -408,6 +425,64 @@ export class PgIdentityRepository implements IdentityRepository, AccountReposito
     return (result.rowCount ?? 0) > 0
   }
 
+  async recordRoleMessage(input: RoleMessageInput): Promise<void> {
+    await this.pool.query(
+      `
+        insert into role_messages (recipient, sender, from_addr, subject, headers, body_mime, content_hash)
+        values ($1, $2, $3, $4, $5::jsonb, $6, $7)
+        on conflict (content_hash) do nothing
+      `,
+      [input.recipient, input.sender, input.from, input.subject, JSON.stringify(input.headers ?? []), input.bodyMime, input.contentHash],
+    )
+  }
+
+  async listRoleMessages(search = ''): Promise<RoleMessageSummary[]> {
+    const normalizedSearch = search.trim().toLowerCase()
+    const result = normalizedSearch
+      ? await this.pool.query<RoleMessageRow>(
+          `
+            select id, recipient, sender, from_addr, subject, received_at
+            from role_messages
+            where recipient like $1 or sender like $1 or subject like $1
+            order by received_at desc
+            limit 200
+          `,
+          [`%${normalizedSearch}%`],
+        )
+      : await this.pool.query<RoleMessageRow>(
+          `
+            select id, recipient, sender, from_addr, subject, received_at
+            from role_messages
+            order by received_at desc
+            limit 200
+          `,
+        )
+
+    return result.rows.map(toRoleMessageSummary)
+  }
+
+  async getRoleMessage(id: string): Promise<RoleMessage | null> {
+    if (!/^\d+$/.test(id)) return null
+    const result = await this.pool.query<RoleMessageRow>(
+      `
+        select id, recipient, sender, from_addr, subject, headers, body_mime, received_at
+        from role_messages
+        where id = $1
+        limit 1
+      `,
+      [id],
+    )
+
+    const row = result.rows[0]
+    return row ? toRoleMessage(row) : null
+  }
+
+  async deleteRoleMessage(id: string): Promise<boolean> {
+    if (!/^\d+$/.test(id)) return false
+    const result = await this.pool.query('delete from role_messages where id = $1', [id])
+    return (result.rowCount ?? 0) > 0
+  }
+
   async close(): Promise<void> {
     await this.pool.end()
   }
@@ -460,6 +535,25 @@ function toAdminIdentity(row: IdentityRow): AdminIdentity {
     ...toIdentity(row),
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
+  }
+}
+
+function toRoleMessageSummary(row: RoleMessageRow): RoleMessageSummary {
+  return {
+    id: String(row.id),
+    recipient: row.recipient,
+    sender: row.sender,
+    from: row.from_addr,
+    subject: row.subject,
+    receivedAt: toIsoString(row.received_at),
+  }
+}
+
+function toRoleMessage(row: RoleMessageRow): RoleMessage {
+  return {
+    ...toRoleMessageSummary(row),
+    headers: row.headers ?? [],
+    bodyMime: row.body_mime ?? '',
   }
 }
 

@@ -11,6 +11,10 @@ import type {
   Plan,
   PlanLimits,
   PolicyRepository,
+  RoleMessage,
+  RoleMessageInput,
+  RoleMessageRepository,
+  RoleMessageSummary,
   UserIdentity,
 } from '../src/types.js'
 
@@ -20,12 +24,15 @@ interface SendEntry {
   at: number
 }
 
-export class MemoryIdentityRepository implements IdentityRepository, AccountRepository, PolicyRepository, DomainRepository {
+export class MemoryIdentityRepository
+  implements IdentityRepository, AccountRepository, PolicyRepository, DomainRepository, RoleMessageRepository
+{
   readonly identities = new Map<string, AdminIdentity>()
   readonly accounts = new Map<string, Account>()
   readonly plans = new Map<string, Plan>(DEFAULT_PLANS.map((plan) => [plan.name, { ...plan }]))
   readonly domains = new Set<string>()
   readonly sends: SendEntry[] = []
+  readonly roleMessages: RoleMessage[] = []
   fail = false
   private nextId = 1
 
@@ -226,6 +233,49 @@ export class MemoryIdentityRepository implements IdentityRepository, AccountRepo
   async deleteDomain(domain: string): Promise<boolean> {
     return this.domains.delete(domain)
   }
+
+  async recordRoleMessage(input: RoleMessageInput): Promise<void> {
+    if (this.fail) throw new Error('database unavailable')
+
+    if (this.roleHashes.has(input.contentHash)) return
+    this.roleHashes.add(input.contentHash)
+    this.roleMessages.push({
+      id: String(this.nextId++),
+      recipient: input.recipient,
+      sender: input.sender,
+      from: input.from,
+      subject: input.subject,
+      headers: input.headers,
+      bodyMime: input.bodyMime,
+      receivedAt: new Date().toISOString(),
+    })
+  }
+
+  async listRoleMessages(search = ''): Promise<RoleMessageSummary[]> {
+    const normalizedSearch = search.trim().toLowerCase()
+    return this.roleMessages
+      .filter(
+        (message) =>
+          !normalizedSearch ||
+          message.recipient.includes(normalizedSearch) ||
+          message.sender.includes(normalizedSearch) ||
+          message.subject.toLowerCase().includes(normalizedSearch),
+      )
+      .map(({ headers: _headers, bodyMime: _bodyMime, ...summary }) => summary)
+  }
+
+  async getRoleMessage(id: string): Promise<RoleMessage | null> {
+    return this.roleMessages.find((message) => message.id === id) ?? null
+  }
+
+  async deleteRoleMessage(id: string): Promise<boolean> {
+    const index = this.roleMessages.findIndex((message) => message.id === id)
+    if (index === -1) return false
+    this.roleMessages.splice(index, 1)
+    return true
+  }
+
+  private readonly roleHashes = new Set<string>()
 
   private ensureAccount(pubkey: string): Account {
     const existing = this.accounts.get(pubkey)

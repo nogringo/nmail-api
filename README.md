@@ -6,6 +6,7 @@ TypeScript API for identity resolution and inbound mail policy:
 - `POST /inbound/decision` answers the inbound SMTP decision protocol.
 - `POST /outbound/decision` answers the outbound (nostr → SMTP) decision protocol, enabled only when `OUTBOUND_DECISION_TOKEN` is set.
 - `POST /aliases/claim` lets a user claim a provisioned alias by posting a signed Nostr event (kind `27240`, `address` tag). No token: the signature is the auth. Enforces the per-plan `max_aliases` limit (free 2, premium 10). See [docs/AccountModel.md](docs/AccountModel.md).
+- `POST /inbound/role` receives mail addressed to reserved role mailboxes (`abuse@`, `postmaster@`, ...) from the `haraka-webhook` role webhook and stores it for the operator to read in `/admin`. Enabled only when `WEBHOOK_SIGNING_KEY` is set. The request is `application/x-www-form-urlencoded` (Mailgun-style: `recipient`, `sender`, `from`, `subject`, `message-headers`, `timestamp`, `token`, `signature`, `body-mime`); auth is the plugin's `HMAC-SHA256(timestamp+token)` signature.
 
 ## Configuration
 
@@ -21,6 +22,8 @@ Environment variables:
 - `OUTBOUND_DECISION_TOKEN`: optional shared secret that enables and protects `POST /outbound/decision`. When unset, the outbound route is not registered.
 - `OUTBOUND_MAX_BODY_BYTES`: max accepted body size for `POST /outbound/decision`, default `33554432` (32 MB). Must be larger than the biggest plan message size so the full `.eml` fits.
 - `ADMIN_PASSWORD`: optional password that enables the `/admin` identity management UI.
+- `WEBHOOK_SIGNING_KEY`: optional HMAC key that enables and protects `POST /inbound/role`. When unset, the role route is not registered. Must equal the `haraka-webhook` plugin's `WEBHOOK_SIGNING_KEY` (the plugin signs both webhooks with it), and the plugin's `WEBHOOK_ROLE_URL` should point at this route.
+- `ROLE_WEBHOOK_MAX_BODY_BYTES`: max accepted body size for `POST /inbound/role`, default `33554432` (32 MB), so the full `.eml` fits.
 
 ## Account and identity model
 

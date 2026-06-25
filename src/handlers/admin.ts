@@ -10,9 +10,10 @@ import type {
   IdentityRepository,
   IdentityVisibility,
   PolicyRepository,
+  RoleMessageRepository,
 } from '../types.js'
 
-type AdminRepository = IdentityRepository & AccountRepository & PolicyRepository & DomainRepository
+type AdminRepository = IdentityRepository & AccountRepository & PolicyRepository & DomainRepository & RoleMessageRepository
 
 const cookieName = 'nmail_admin_session'
 const sessionMaxAgeSeconds = 60 * 60 * 12
@@ -32,6 +33,10 @@ interface PubkeyParams {
 
 interface DomainParams {
   domain: string
+}
+
+interface RoleMessageParams {
+  id: string
 }
 
 interface IdentityQuery {
@@ -206,6 +211,31 @@ export function registerAdminRoutes(app: FastifyInstance, repo: AdminRepository,
 
     const deleted = await repo.deleteDomain(normalizeDomain(request.params.domain))
     if (!deleted) return reply.code(404).send({ error: 'domain_not_found' })
+
+    return reply.code(204).send()
+  })
+
+  app.get('/admin/api/role-messages', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: IdentityQuery }>, reply) => {
+    if (!repo.listRoleMessages) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const messages = await repo.listRoleMessages(request.query.search)
+    return reply.send({ messages })
+  })
+
+  app.get('/admin/api/role-messages/:id', { preHandler: auth }, async (request: FastifyRequest<{ Params: RoleMessageParams }>, reply) => {
+    if (!repo.getRoleMessage) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const message = await repo.getRoleMessage(request.params.id)
+    if (!message) return reply.code(404).send({ error: 'role_message_not_found' })
+
+    return reply.send({ message })
+  })
+
+  app.delete('/admin/api/role-messages/:id', { preHandler: auth }, async (request: FastifyRequest<{ Params: RoleMessageParams }>, reply) => {
+    if (!repo.deleteRoleMessage) return reply.code(501).send({ error: 'admin_repository_unavailable' })
+
+    const deleted = await repo.deleteRoleMessage(request.params.id)
+    if (!deleted) return reply.code(404).send({ error: 'role_message_not_found' })
 
     return reply.code(204).send()
   })
@@ -719,6 +749,7 @@ const adminPage = String.raw`<!doctype html>
         <button class="tab" type="button" data-tab="accounts">Accounts</button>
         <button class="tab" type="button" data-tab="plans">Plans</button>
         <button class="tab" type="button" data-tab="domains">Domains</button>
+        <button class="tab" type="button" data-tab="role">Role mail</button>
       </nav>
 
       <section id="view-identities" class="view">
@@ -916,6 +947,42 @@ const adminPage = String.raw`<!doctype html>
             <tbody id="domain-rows"></tbody>
           </table>
         </section>
+      </section>
+      <section id="view-role" class="view hidden">
+        <div class="toolbar">
+          <input id="role-search" class="search" type="search" placeholder="Search recipient, sender, subject">
+        </div>
+        <div class="layout">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Role mail</h2>
+              <span id="role-count" class="badge">0</span>
+            </div>
+            <p class="hint">Mail sent to reserved role mailboxes (abuse@, postmaster@, ...), received from the mail webhook.</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Received</th>
+                  <th>To</th>
+                  <th>From</th>
+                  <th>Subject</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="role-rows"></tbody>
+            </table>
+          </section>
+          <aside class="panel">
+            <div class="panel-head">
+              <h2>Message</h2>
+              <button id="role-clear" class="ghost" type="button">Clear</button>
+            </div>
+            <div class="form">
+              <p id="role-detail-empty" class="hint" style="margin: 0">Select a message to view it.</p>
+              <pre id="role-detail" class="mono hidden" style="white-space: pre-wrap; max-height: 60vh; overflow: auto; margin: 0;"></pre>
+            </div>
+          </aside>
+        </div>
       </section>
     </main>
   </div>
@@ -1346,6 +1413,84 @@ const adminPage = String.raw`<!doctype html>
       }
     });
 
+    // --- Role mail ---
+    let roleMessages = [];
+    let roleSearchTimer;
+    const roleRows = document.querySelector('#role-rows');
+    const roleCount = document.querySelector('#role-count');
+    const roleSearch = document.querySelector('#role-search');
+    const roleDetail = document.querySelector('#role-detail');
+    const roleDetailEmpty = document.querySelector('#role-detail-empty');
+
+    function formatDate(value) {
+      if (!value) return '';
+      const date = new Date(value);
+      return isNaN(date.getTime()) ? value : date.toLocaleString();
+    }
+
+    async function loadRoleMessages() {
+      const query = roleSearch.value.trim();
+      const data = await request('/admin/api/role-messages' + (query ? '?search=' + encodeURIComponent(query) : ''));
+      roleMessages = data.messages;
+      roleCount.textContent = String(roleMessages.length);
+      roleRows.innerHTML = roleMessages.map(renderRoleRow).join('');
+    }
+
+    function renderRoleRow(message) {
+      return '<tr>' +
+        '<td data-label="Received">' + escapeHtml(formatDate(message.receivedAt)) + '</td>' +
+        '<td data-label="To" class="mono">' + escapeHtml(message.recipient) + '</td>' +
+        '<td data-label="From">' + escapeHtml(message.from || message.sender) + '</td>' +
+        '<td data-label="Subject">' + escapeHtml(message.subject || '(no subject)') + '</td>' +
+        '<td data-label="Actions" class="actions"><div class="row-actions">' +
+          '<button class="secondary" type="button" data-role-action="view" data-id="' + escapeHtml(message.id) + '">View</button>' +
+          '<button class="danger" type="button" data-role-action="delete" data-id="' + escapeHtml(message.id) + '">Delete</button>' +
+        '</div></td>' +
+      '</tr>';
+    }
+
+    function clearRoleDetail() {
+      roleDetail.textContent = '';
+      roleDetail.classList.add('hidden');
+      roleDetailEmpty.classList.remove('hidden');
+    }
+
+    roleRows.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-role-action]');
+      if (!button) return;
+      const id = button.dataset.id;
+
+      if (button.dataset.roleAction === 'view') {
+        try {
+          const data = await request('/admin/api/role-messages/' + encodeURIComponent(id));
+          const headers = Array.isArray(data.message.headers)
+            ? data.message.headers.map((header) => (Array.isArray(header) ? header[0] + ': ' + header[1] : '')).filter(Boolean).join('\n')
+            : '';
+          roleDetail.textContent = (headers ? headers + '\n\n' : '') + (data.message.bodyMime || '');
+          roleDetail.classList.remove('hidden');
+          roleDetailEmpty.classList.add('hidden');
+        } catch (error) {
+          alert(error.message);
+        }
+        return;
+      }
+
+      try {
+        if (!confirm('Delete this role message?')) return;
+        await request('/admin/api/role-messages/' + encodeURIComponent(id), { method: 'DELETE' });
+        clearRoleDetail();
+        await loadRoleMessages();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.querySelector('#role-clear').addEventListener('click', clearRoleDetail);
+    roleSearch.addEventListener('input', () => {
+      clearTimeout(roleSearchTimer);
+      roleSearchTimer = setTimeout(() => loadRoleMessages().catch(() => {}), 180);
+    });
+
     // --- Tabs ---
     let plansLoaded = false;
     document.querySelectorAll('.tab').forEach((tab) => {
@@ -1361,6 +1506,7 @@ const adminPage = String.raw`<!doctype html>
             await loadAccounts();
           }
           if (target === 'domains') await loadDomains();
+          if (target === 'role') await loadRoleMessages();
         } catch (error) {
           // surfaced by individual loaders
         }
