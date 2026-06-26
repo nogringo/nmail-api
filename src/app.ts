@@ -2,7 +2,7 @@ import cors from '@fastify/cors'
 import formbody from '@fastify/formbody'
 import Fastify from 'fastify'
 import { registerAdminRoutes } from './handlers/admin.js'
-import { createClaimAliasHandler } from './handlers/claimAlias.js'
+import { registerAliasRoutes } from './handlers/aliases.js'
 import { createInboundDecisionHandler } from './handlers/inboundDecision.js'
 import { createNip05Handler } from './handlers/nip05.js'
 import { createOutboundDecisionHandler } from './handlers/outboundDecision.js'
@@ -37,7 +37,7 @@ export async function buildApp(
   app.get('/healthz', async () => 'ok')
   app.get('/.well-known/nostr.json', createNip05Handler(repo))
   app.post('/inbound/decision', createInboundDecisionHandler(repo, config))
-  app.post('/aliases/claim', { bodyLimit: 64 * 1024 }, createClaimAliasHandler(repo))
+  registerAliasRoutes(app, repo)
   if (config.outboundDecisionToken) {
     app.post(
       '/outbound/decision',

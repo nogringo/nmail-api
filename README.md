@@ -5,7 +5,7 @@ TypeScript API for identity resolution and inbound mail policy:
 - `GET /.well-known/nostr.json?name=<local_part>` resolves NIP-05 identities.
 - `POST /inbound/decision` answers the inbound SMTP decision protocol.
 - `POST /outbound/decision` answers the outbound (nostr → SMTP) decision protocol, enabled only when `OUTBOUND_DECISION_TOKEN` is set.
-- `POST /aliases/claim` lets a user claim a provisioned alias by posting a signed Nostr event (kind `27240`, `address` tag). No token: the signature is the auth. Enforces the per-plan `max_aliases` limit (free 2, premium 10). See [docs/AccountModel.md](docs/AccountModel.md).
+- `PUT/GET/DELETE /aliases[/{name}]` is the REST alias lifecycle (claim, list, release) authenticated with [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) (`Authorization: Nostr <base64 kind-27235 event>`); the signing pubkey owns the aliases it claims, served on the alias domain (request Host). Enforces the per-plan `max_aliases` limit (free 2, premium 10). See [docs/AliasProtocol.md](docs/AliasProtocol.md) and [docs/AccountModel.md](docs/AccountModel.md).
 - `POST /inbound/role` receives mail addressed to reserved role mailboxes (`abuse@`, `postmaster@`, ...) from the `haraka-webhook` role webhook and stores it for the operator to read in `/admin`. Enabled only when `WEBHOOK_SIGNING_KEY` is set. The request is `application/x-www-form-urlencoded` (Mailgun-style: `recipient`, `sender`, `from`, `subject`, `message-headers`, `timestamp`, `token`, `signature`, `body-mime`); auth is the plugin's `HMAC-SHA256(timestamp+token)` signature.
 
 ## Configuration
@@ -218,7 +218,7 @@ seeded by migration `003`:
 
 Plans are managed from the admin UI (`Plans` tab) and per-pubkey plan choice
 from the `Accounts` tab; new plans can be added. `max_aliases` caps how many
-provisioned aliases an account may claim via `POST /aliases/claim`
+provisioned aliases an account may claim via `PUT /aliases/{name}`
 (pubkey-encoded addresses are not aliases and do not count). Each plan also has
 `allowed_domains`: the domains it may create or send pubkey-encoded addresses on
 (empty = all managed domains; provisioned aliases are exempt and keep working

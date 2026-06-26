@@ -209,6 +209,31 @@ export class PgIdentityRepository
     return (result.rowCount ?? 0) > 0
   }
 
+  async setIdentityVisibility(
+    domain: string,
+    localPart: string,
+    pubkey: string,
+    visibility: IdentityVisibility,
+  ): Promise<UserIdentity | null> {
+    const result = await this.pool.query<IdentityRow>(
+      `
+        update identities
+        set visibility = $4, updated_at = now()
+        where domain = $1 and local_part = $2 and pubkey = $3
+        returning domain, local_part, pubkey, visibility
+      `,
+      [domain, localPart, pubkey, visibility],
+    )
+
+    const row = result.rows[0]
+    return row ? toIdentity(row) : null
+  }
+
+  async deleteIdentityByName(domain: string, localPart: string): Promise<boolean> {
+    const result = await this.pool.query('delete from identities where domain = $1 and local_part = $2', [domain, localPart])
+    return (result.rowCount ?? 0) > 0
+  }
+
   async getAccount(pubkey: string): Promise<Account | null> {
     const result = await this.pool.query<AccountRow>(
       `

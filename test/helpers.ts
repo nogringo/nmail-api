@@ -7,6 +7,7 @@ import type {
   DomainRepository,
   IdentityInput,
   IdentityRepository,
+  IdentityVisibility,
   OutboundSendCounts,
   Plan,
   PlanLimits,
@@ -127,6 +128,28 @@ export class MemoryIdentityRepository
 
     this.identities.delete(key(current.domain, current.localPart))
     return true
+  }
+
+  async setIdentityVisibility(
+    domain: string,
+    localPart: string,
+    pubkey: string,
+    visibility: IdentityVisibility,
+  ): Promise<UserIdentity | null> {
+    if (this.fail) throw new Error('database unavailable')
+
+    const current = this.identities.get(key(domain, localPart))
+    if (!current || current.pubkey !== pubkey) return null
+
+    const next = { ...current, visibility, updatedAt: new Date().toISOString() }
+    this.identities.set(key(domain, localPart), next)
+    return { domain: next.domain, localPart: next.localPart, pubkey: next.pubkey, visibility: next.visibility }
+  }
+
+  async deleteIdentityByName(domain: string, localPart: string): Promise<boolean> {
+    if (this.fail) throw new Error('database unavailable')
+
+    return this.identities.delete(key(domain, localPart))
   }
 
   async getAccount(pubkey: string): Promise<Account | null> {

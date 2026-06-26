@@ -1,6 +1,45 @@
 const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
 const BECH32_GENERATORS = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
 
+export interface NostrEvent {
+  id: string
+  pubkey: string
+  created_at: number
+  kind: number
+  tags: string[][]
+  content: string
+  sig: string
+}
+
+// Shape-check an untrusted value into a NostrEvent. It does not verify the
+// signature; callers pass the result to nostr-tools verifyEvent for that.
+export function asNostrEvent(value: unknown): NostrEvent | null {
+  if (!value || typeof value !== 'object') return null
+
+  const event = value as Record<string, unknown>
+  if (typeof event.id !== 'string') return null
+  if (typeof event.pubkey !== 'string') return null
+  if (typeof event.created_at !== 'number') return null
+  if (typeof event.kind !== 'number') return null
+  if (typeof event.content !== 'string') return null
+  if (typeof event.sig !== 'string') return null
+  if (!Array.isArray(event.tags) || !event.tags.every(isStringArray)) return null
+
+  return event as unknown as NostrEvent
+}
+
+export function findTagValue(tags: string[][], name: string): string | undefined {
+  for (const tag of tags) {
+    if (tag[0] === name) return tag[1]
+  }
+
+  return undefined
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+}
+
 export function decodeNpub(value: string): string | null {
   const decoded = decodeBech32(value)
   if (!decoded || decoded.hrp !== 'npub') return null

@@ -60,6 +60,8 @@ export interface IdentityRepository {
   createIdentity?(identity: IdentityInput): Promise<AdminIdentity>
   updateIdentity?(id: string, identity: IdentityInput): Promise<AdminIdentity | null>
   deleteIdentity?(id: string): Promise<boolean>
+  setIdentityVisibility?(domain: string, localPart: string, pubkey: string, visibility: IdentityVisibility): Promise<UserIdentity | null>
+  deleteIdentityByName?(domain: string, localPart: string): Promise<boolean>
   close?(): Promise<void>
 }
 

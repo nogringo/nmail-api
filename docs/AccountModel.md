@@ -74,34 +74,43 @@ encoded decode). Unknown alias that does not decode => `deny unknown_recipient`.
 If the resolved pubkey has an account that is `active = false` or
 `mail_enabled = false` => `deny unknown_recipient`. Missing account = allowed.
 
-## Alias claim (`/aliases/claim`)
+## Alias lifecycle (`/aliases`, `/aliases/{name}`)
 
-Lets a user claim a provisioned alias themselves (the admin UI is no longer the
-only way to create one). The client signs a Nostr event and POSTs it as the body
-(the signed event *is* the authentication, there is no decision token):
+Lets a user manage their provisioned aliases themselves (the admin UI is no
+longer the only way to create one). The REST protocol in `docs/AliasProtocol.md`
+is served on the alias domain (the request **Host**, i.e. the NIP-05 domain) and
+authenticated with [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md)
+(`Authorization: Nostr <base64 kind-27235 event>`); the signing pubkey owns the
+alias and the name is the URL path.
 
-- `kind` = `ALIAS_CLAIM_KIND` (`27240`, app-specific).
-- tag `["address", "alice@example.com"]` = the requested alias.
-- tag `["visibility", "public"|"private"]` (optional, default `public`).
-- `created_at` within ±300 s of the server clock (replay bound).
-- `sig`/`id` valid (verified with `nostr-tools`).
+- `PUT /aliases/{name}?visibility=public|private` claims a free name (`201`) or,
+  for the owner, updates its visibility (`200`, idempotent). `409 alias_taken`,
+  `400`/`403` on policy rejection.
+- `GET /aliases` lists the authenticated pubkey's aliases (`200 { aliases }`).
+- `DELETE /aliases/{name}` releases it: `204`, `404 alias_not_found`,
+  `403 not_owner`.
 
-Server checks, in order: valid event/signature, fresh `created_at`, parsable
-address, local part length **6-47** (the 47 cap also keeps aliases clear of the
-48-52 char base36-encoded range, so no pubkey-encoded address can be claimed as
-an alias), domain is managed, the alias is free (or already owned by the same
+Provisioning (`provisionAlias` in `src/aliases.ts`) checks, in order: local part
+not reserved and length **6-47** / NIP-05 charset (the 47 cap also keeps aliases
+clear of the 48-52 char base36-encoded range, so no pubkey-encoded address can be
+claimed), domain is managed, the alias is free (or already owned by the same
 pubkey => idempotent), the account is `active`, the domain is in the plan's
 `allowed_domains` (empty = all managed domains), and the pubkey's current
 non-encoded alias count is `< plan.max_aliases`. On success it inserts the
-`identities` row (auto-creating the account) and returns the alias. Errors:
-`invalid_event`, `invalid_signature`, `stale_event`, `invalid_address`,
-`invalid_local_part`, `domain_not_managed`, `alias_taken`, `account_disabled`,
-`domain_not_allowed`, `alias_limit_reached`.
+`identities` row (auto-creating the account). Rejections: `invalid_local_part`,
+`reserved_local_part`, `encoded_not_claimable`, `domain_not_managed`,
+`alias_taken`, `account_disabled`, `domain_not_allowed`, `alias_limit_reached`.
 
 Unlike outbound sending (where existing aliases are grandfathered past the plan's
 `allowed_domains`), **claiming** a *new* alias is gated by `allowed_domains`: the
 plan that creates the address must be allowed on its domain. An already-owned
 alias still returns idempotently regardless of the current plan.
+
+NIP-98 binding (`src/nip98.ts`): kind `27235`, `created_at` within ±60 s, the
+`method` tag matches the request, and the `u` tag's host + path match the request.
+Scheme and query string are not compared (TLS is proxy-terminated; the query only
+carries the idempotent `visibility` preference). Auth failures return `401` with a
+`WWW-Authenticate: Nostr` header.
 
 ## NIP-05 (`/.well-known/nostr.json`)
 
