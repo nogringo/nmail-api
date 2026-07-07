@@ -12,6 +12,9 @@ import type {
   Plan,
   PlanLimits,
   PolicyRepository,
+  PushSubscriptionInput,
+  PushSubscriptionRepository,
+  PushTransportType,
   RoleMessage,
   RoleMessageInput,
   RoleMessageRepository,
@@ -26,7 +29,13 @@ interface SendEntry {
 }
 
 export class MemoryIdentityRepository
-  implements IdentityRepository, AccountRepository, PolicyRepository, DomainRepository, RoleMessageRepository
+  implements
+    IdentityRepository,
+    AccountRepository,
+    PolicyRepository,
+    DomainRepository,
+    RoleMessageRepository,
+    PushSubscriptionRepository
 {
   readonly identities = new Map<string, AdminIdentity>()
   readonly accounts = new Map<string, Account>()
@@ -34,6 +43,7 @@ export class MemoryIdentityRepository
   readonly domains = new Set<string>()
   readonly sends: SendEntry[] = []
   readonly roleMessages: RoleMessage[] = []
+  readonly pushSubscriptions = new Map<string, PushSubscriptionInput>()
   fail = false
   private nextId = 1
 
@@ -298,6 +308,26 @@ export class MemoryIdentityRepository
     return true
   }
 
+  async upsertPushSubscription(input: PushSubscriptionInput): Promise<void> {
+    if (this.fail) throw new Error('database unavailable')
+
+    this.ensureAccount(input.pubkey)
+    this.pushSubscriptions.set(pushKey(input.pubkey, input.transport, input.destination), {
+      pubkey: input.pubkey,
+      transport: input.transport,
+      destination: input.destination,
+      p256dh: input.p256dh ?? null,
+      auth: input.auth ?? null,
+      instance: input.instance ?? null,
+    })
+  }
+
+  async deletePushSubscription(pubkey: string, transport: PushTransportType, destination: string): Promise<boolean> {
+    if (this.fail) throw new Error('database unavailable')
+
+    return this.pushSubscriptions.delete(pushKey(pubkey, transport, destination))
+  }
+
   private readonly roleHashes = new Set<string>()
 
   private ensureAccount(pubkey: string): Account {
@@ -323,6 +353,10 @@ export function identity(overrides: Partial<UserIdentity> = {}): UserIdentity {
 
 function key(domain: string, localPart: string): string {
   return `${domain}:${localPart}`
+}
+
+function pushKey(pubkey: string, transport: PushTransportType, destination: string): string {
+  return `${pubkey}:${transport}:${destination}`
 }
 
 function toAdminIdentity(id: string, identity: UserIdentity): AdminIdentity {

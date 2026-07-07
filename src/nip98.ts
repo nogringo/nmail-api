@@ -16,6 +16,8 @@ export type Nip98Reason =
   | 'stale_event'
   | 'method_mismatch'
   | 'url_mismatch'
+  | 'missing_payload'
+  | 'payload_mismatch'
 
 export type Nip98Result = { ok: true; pubkey: string } | { ok: false; reason: Nip98Reason }
 
@@ -26,6 +28,7 @@ export interface Nip98Request {
   // request.url: the path, possibly with a query string.
   path: string
   nowSeconds: number
+  payloadHash?: string
 }
 
 export function verifyNip98(request: Nip98Request): Nip98Result {
@@ -47,6 +50,12 @@ export function verifyNip98(request: Nip98Request): Nip98Result {
   if (!signed) return fail('url_mismatch')
   if (normalizeDomain(signed.host) !== normalizeDomain(request.host)) return fail('url_mismatch')
   if (signed.pathname !== pathname(request.path)) return fail('url_mismatch')
+
+  if (request.payloadHash) {
+    const payload = findTagValue(event.tags, 'payload')
+    if (!payload) return fail('missing_payload')
+    if (payload.toLowerCase() !== request.payloadHash.toLowerCase()) return fail('payload_mismatch')
+  }
 
   return { ok: true, pubkey: event.pubkey }
 }

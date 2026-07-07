@@ -13,6 +13,9 @@ import type {
   Plan,
   PlanLimits,
   PolicyRepository,
+  PushSubscriptionInput,
+  PushSubscriptionRepository,
+  PushTransportType,
   RoleMessage,
   RoleMessageInput,
   RoleMessageRepository,
@@ -74,7 +77,13 @@ interface RoleMessageRow {
 }
 
 export class PgIdentityRepository
-  implements IdentityRepository, AccountRepository, PolicyRepository, DomainRepository, RoleMessageRepository
+  implements
+    IdentityRepository,
+    AccountRepository,
+    PolicyRepository,
+    DomainRepository,
+    RoleMessageRepository,
+    PushSubscriptionRepository
 {
   private readonly pool: pg.Pool
 
@@ -505,6 +514,46 @@ export class PgIdentityRepository
   async deleteRoleMessage(id: string): Promise<boolean> {
     if (!/^\d+$/.test(id)) return false
     const result = await this.pool.query('delete from role_messages where id = $1', [id])
+    return (result.rowCount ?? 0) > 0
+  }
+
+  async upsertPushSubscription(input: PushSubscriptionInput): Promise<void> {
+    const client = await this.pool.connect()
+    try {
+      await client.query('begin')
+      await client.query('insert into accounts (pubkey) values ($1) on conflict (pubkey) do nothing', [input.pubkey])
+      await client.query(
+        `
+          insert into push_subscriptions (pubkey, transport, destination, p256dh, auth, instance)
+          values ($1, $2, $3, $4, $5, $6)
+          on conflict (pubkey, transport, destination) do update set
+            p256dh = excluded.p256dh,
+            auth = excluded.auth,
+            instance = excluded.instance
+        `,
+        [
+          input.pubkey,
+          input.transport,
+          input.destination,
+          input.p256dh ?? null,
+          input.auth ?? null,
+          input.instance ?? null,
+        ],
+      )
+      await client.query('commit')
+    } catch (error) {
+      await client.query('rollback')
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  async deletePushSubscription(pubkey: string, transport: PushTransportType, destination: string): Promise<boolean> {
+    const result = await this.pool.query(
+      'delete from push_subscriptions where pubkey = $1 and transport = $2 and destination = $3',
+      [pubkey, transport, destination],
+    )
     return (result.rowCount ?? 0) > 0
   }
 

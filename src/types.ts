@@ -188,3 +188,19 @@ export interface RoleMessageRepository {
   getRoleMessage?(id: string): Promise<RoleMessage | null>
   deleteRoleMessage?(id: string): Promise<boolean>
 }
+
+export type PushTransportType = 'fcm' | 'unifiedpush'
+
+export interface PushSubscriptionInput {
+  pubkey: string
+  transport: PushTransportType
+  destination: string
+  p256dh?: string | null
+  auth?: string | null
+  instance?: string | null
+}
+
+export interface PushSubscriptionRepository {
+  upsertPushSubscription(input: PushSubscriptionInput): Promise<void>
+  deletePushSubscription(pubkey: string, transport: PushTransportType, destination: string): Promise<boolean>
+}
