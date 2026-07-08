@@ -2,6 +2,7 @@ export interface AppConfig {
   port: number
   databaseUrl: string
   inboundDecisionToken: string
+  inboundNotificationToken?: string
   outboundDecisionToken?: string
   outboundMaxBodyBytes: number
   adminPassword?: string
@@ -200,7 +201,46 @@ export interface PushSubscriptionInput {
   instance?: string | null
 }
 
+export interface PushSubscription {
+  pubkey: string
+  transport: PushTransportType
+  destination: string
+  p256dh: string | null
+  auth: string | null
+  instance: string | null
+}
+
 export interface PushSubscriptionRepository {
   upsertPushSubscription(input: PushSubscriptionInput): Promise<void>
   deletePushSubscription(pubkey: string, transport: PushTransportType, destination: string): Promise<boolean>
+  listPushSubscriptions(pubkeys: string[]): Promise<PushSubscription[]>
+}
+
+export interface InboundNotificationEmailMetadata {
+  from?: {
+    address: string
+    name?: string
+  }
+  subject?: string
+  preview?: string
+}
+
+export interface InboundNotificationGiftWrap {
+  id?: string
+  pubkey?: string
+  created_at?: number
+  kind?: number
+  tags: string[][]
+}
+
+export interface InboundNotification {
+  giftWrap: InboundNotificationGiftWrap
+  recipientPubkeys: string[]
+  authenticatedPubkeys: string[]
+  email?: InboundNotificationEmailMetadata
+  subscriptions: PushSubscription[]
+}
+
+export interface PushNotificationDispatcher {
+  dispatch(notification: InboundNotification): Promise<void>
 }

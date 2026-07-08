@@ -4,6 +4,7 @@ import Fastify from 'fastify'
 import { registerAdminRoutes } from './handlers/admin.js'
 import { registerAliasRoutes } from './handlers/aliases.js'
 import { createInboundDecisionHandler } from './handlers/inboundDecision.js'
+import { createInboundNotificationHandler } from './handlers/inboundNotification.js'
 import { createNip05Handler } from './handlers/nip05.js'
 import { createOutboundDecisionHandler } from './handlers/outboundDecision.js'
 import { createPushRegistrationHandler } from './handlers/pushRegistration.js'
@@ -15,6 +16,7 @@ import type {
   IdentityRepository,
   PolicyRepository,
   PushSubscriptionRepository,
+  PushNotificationDispatcher,
   RoleMessageRepository,
 } from './types.js'
 
@@ -28,9 +30,11 @@ export async function buildApp(
     RoleMessageRepository &
     PushSubscriptionRepository,
   config: Pick<AppConfig, 'inboundDecisionToken' | 'outboundDecisionToken' | 'adminPassword' | 'roleWebhookSigningKey'> & {
+    inboundNotificationToken?: string
     outboundMaxBodyBytes?: number
     roleWebhookMaxBodyBytes?: number
   },
+  pushNotificationDispatcher?: PushNotificationDispatcher,
 ) {
   const app = Fastify({ logger: true })
 
@@ -57,6 +61,7 @@ export async function buildApp(
   app.get('/healthz', async () => 'ok')
   app.get('/.well-known/nostr.json', createNip05Handler(repo))
   app.post('/inbound/decision', createInboundDecisionHandler(repo, config))
+  app.post('/inbound/notifications', createInboundNotificationHandler(repo, config, pushNotificationDispatcher))
   app.post('/push/subscriptions', createPushRegistrationHandler(repo))
   registerAliasRoutes(app, repo)
   if (config.outboundDecisionToken) {

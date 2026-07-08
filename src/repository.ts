@@ -14,6 +14,7 @@ import type {
   PlanLimits,
   PolicyRepository,
   PushSubscriptionInput,
+  PushSubscription,
   PushSubscriptionRepository,
   PushTransportType,
   RoleMessage,
@@ -74,6 +75,15 @@ interface RoleMessageRow {
   headers?: unknown
   body_mime?: string
   received_at?: Date | string
+}
+
+interface PushSubscriptionRow {
+  pubkey: string
+  transport: PushTransportType
+  destination: string
+  p256dh: string | null
+  auth: string | null
+  instance: string | null
 }
 
 export class PgIdentityRepository
@@ -557,6 +567,22 @@ export class PgIdentityRepository
     return (result.rowCount ?? 0) > 0
   }
 
+  async listPushSubscriptions(pubkeys: string[]): Promise<PushSubscription[]> {
+    if (pubkeys.length === 0) return []
+
+    const result = await this.pool.query<PushSubscriptionRow>(
+      `
+        select pubkey, transport, destination, p256dh, auth, instance
+        from push_subscriptions
+        where pubkey = any($1::char(64)[])
+        order by pubkey asc, transport asc, destination asc
+      `,
+      [pubkeys],
+    )
+
+    return result.rows.map(toPushSubscription)
+  }
+
   async close(): Promise<void> {
     await this.pool.end()
   }
@@ -628,6 +654,17 @@ function toRoleMessage(row: RoleMessageRow): RoleMessage {
     ...toRoleMessageSummary(row),
     headers: row.headers ?? [],
     bodyMime: row.body_mime ?? '',
+  }
+}
+
+function toPushSubscription(row: PushSubscriptionRow): PushSubscription {
+  return {
+    pubkey: row.pubkey,
+    transport: row.transport,
+    destination: row.destination,
+    p256dh: row.p256dh,
+    auth: row.auth,
+    instance: row.instance,
   }
 }
 

@@ -13,6 +13,7 @@ import type {
   PlanLimits,
   PolicyRepository,
   PushSubscriptionInput,
+  PushSubscription,
   PushSubscriptionRepository,
   PushTransportType,
   RoleMessage,
@@ -326,6 +327,25 @@ export class MemoryIdentityRepository
     if (this.fail) throw new Error('database unavailable')
 
     return this.pushSubscriptions.delete(pushKey(pubkey, transport, destination))
+  }
+
+  async listPushSubscriptions(pubkeys: string[]): Promise<PushSubscription[]> {
+    if (this.fail) throw new Error('database unavailable')
+
+    const recipients = new Set(pubkeys)
+    return [...this.pushSubscriptions.values()]
+      .filter((subscription) => recipients.has(subscription.pubkey))
+      .sort((left, right) =>
+        `${left.pubkey}:${left.transport}:${left.destination}`.localeCompare(
+          `${right.pubkey}:${right.transport}:${right.destination}`,
+        ),
+      )
+      .map((subscription) => ({
+        ...subscription,
+        p256dh: subscription.p256dh ?? null,
+        auth: subscription.auth ?? null,
+        instance: subscription.instance ?? null,
+      }))
   }
 
   private readonly roleHashes = new Set<string>()

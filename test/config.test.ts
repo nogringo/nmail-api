@@ -13,9 +13,11 @@ test('loadConfig includes the inbound decision token', () => {
   const config = loadConfig({
     DATABASE_URL: 'postgres://localhost/nmail',
     INBOUND_DECISION_TOKEN: 'secret-token',
+    INBOUND_NOTIFICATION_TOKEN: 'notify-token',
   })
 
   assert.equal(config.inboundDecisionToken, 'secret-token')
+  assert.equal(config.inboundNotificationToken, 'notify-token')
 })
 
 test('loadConfig enables admin only when ADMIN_PASSWORD is set', () => {

@@ -12,6 +12,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: parsePort(env.PORT),
     databaseUrl,
     inboundDecisionToken,
+    inboundNotificationToken: parseOptionalSecret(env.INBOUND_NOTIFICATION_TOKEN),
     outboundDecisionToken: parseOptionalSecret(env.OUTBOUND_DECISION_TOKEN),
     outboundMaxBodyBytes: parseMaxBodyBytes(env.OUTBOUND_MAX_BODY_BYTES, 'OUTBOUND_MAX_BODY_BYTES'),
     adminPassword: parseOptionalSecret(env.ADMIN_PASSWORD),

@@ -21,6 +21,8 @@ Environment variables:
 - `PORT`: HTTP port, default `3000`.
 - `DATABASE_URL`: Postgres connection string.
 - `INBOUND_DECISION_TOKEN`: shared secret required by `POST /inbound/decision`.
+- `INBOUND_NOTIFICATION_TOKEN`: shared secret required by
+  `POST /inbound/notifications`.
 - `OUTBOUND_DECISION_TOKEN`: optional shared secret that enables and protects `POST /outbound/decision`. When unset, the outbound route is not registered.
 - `OUTBOUND_MAX_BODY_BYTES`: max accepted body size for `POST /outbound/decision`, default `33554432` (32 MB). Must be larger than the biggest plan message size so the full `.eml` fits.
 - `ADMIN_PASSWORD`: optional password that enables the `/admin` identity management UI.
