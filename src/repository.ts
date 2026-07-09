@@ -9,11 +9,13 @@ import type {
   IdentityInput,
   IdentityRepository,
   IdentityVisibility,
+  InboundNotificationRepository,
   OutboundSendCounts,
   Plan,
   PlanLimits,
   PolicyRepository,
   PushSubscriptionInput,
+  PushSubscription,
   PushSubscriptionRepository,
   PushTransportType,
   RoleMessage,
@@ -76,6 +78,15 @@ interface RoleMessageRow {
   received_at?: Date | string
 }
 
+interface PushSubscriptionRow {
+  pubkey: string
+  transport: PushTransportType
+  destination: string
+  p256dh: string | null
+  auth: string | null
+  instance: string | null
+}
+
 export class PgIdentityRepository
   implements
     IdentityRepository,
@@ -83,6 +94,7 @@ export class PgIdentityRepository
     PolicyRepository,
     DomainRepository,
     RoleMessageRepository,
+    InboundNotificationRepository,
     PushSubscriptionRepository
 {
   private readonly pool: pg.Pool
@@ -557,6 +569,45 @@ export class PgIdentityRepository
     return (result.rowCount ?? 0) > 0
   }
 
+  async listPushSubscriptions(pubkeys: string[]): Promise<PushSubscription[]> {
+    if (pubkeys.length === 0) return []
+
+    const result = await this.pool.query<PushSubscriptionRow>(
+      `
+        select pubkey, transport, destination, p256dh, auth, instance
+        from push_subscriptions
+        where pubkey = any($1::char(64)[])
+        order by pubkey asc, transport asc, destination asc
+      `,
+      [pubkeys],
+    )
+
+    return result.rows.map(toPushSubscription)
+  }
+
+  async claimInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `
+        insert into inbound_notification_deliveries (recipient_pubkey, event_id)
+        values ($1, $2)
+        on conflict (recipient_pubkey, event_id) do nothing
+      `,
+      [recipientPubkey, eventId],
+    )
+
+    return (result.rowCount ?? 0) > 0
+  }
+
+  async releaseInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<void> {
+    await this.pool.query(
+      `
+        delete from inbound_notification_deliveries
+        where recipient_pubkey = $1 and event_id = $2
+      `,
+      [recipientPubkey, eventId],
+    )
+  }
+
   async close(): Promise<void> {
     await this.pool.end()
   }
@@ -628,6 +679,17 @@ function toRoleMessage(row: RoleMessageRow): RoleMessage {
     ...toRoleMessageSummary(row),
     headers: row.headers ?? [],
     bodyMime: row.body_mime ?? '',
+  }
+}
+
+function toPushSubscription(row: PushSubscriptionRow): PushSubscription {
+  return {
+    pubkey: row.pubkey,
+    transport: row.transport,
+    destination: row.destination,
+    p256dh: row.p256dh,
+    auth: row.auth,
+    instance: row.instance,
   }
 }
 

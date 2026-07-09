@@ -21,6 +21,13 @@ Environment variables:
 - `PORT`: HTTP port, default `3000`.
 - `DATABASE_URL`: Postgres connection string.
 - `INBOUND_DECISION_TOKEN`: shared secret required by `POST /inbound/decision`.
+- `INBOUND_NOTIFICATION_TOKEN`: shared secret required by
+  `POST /inbound/notifications`.
+- `GOOGLE_APPLICATION_CREDENTIALS`: path to the Firebase service-account JSON
+  used for FCM delivery. The project ID is read from this file.
+- `WEB_PUSH_VAPID_SUBJECT`, `WEB_PUSH_VAPID_PUBLIC_KEY`,
+  `WEB_PUSH_VAPID_PRIVATE_KEY`: optional VAPID identity used for
+  UnifiedPush/Web Push. The three values must be configured together.
 - `OUTBOUND_DECISION_TOKEN`: optional shared secret that enables and protects `POST /outbound/decision`. When unset, the outbound route is not registered.
 - `OUTBOUND_MAX_BODY_BYTES`: max accepted body size for `POST /outbound/decision`, default `33554432` (32 MB). Must be larger than the biggest plan message size so the full `.eml` fits.
 - `ADMIN_PASSWORD`: optional password that enables the `/admin` identity management UI.
@@ -220,6 +227,12 @@ transport destination (`fcm.token` or `unifiedpush.endpoint`). Authentication is
 NIP-98 (`Authorization: Nostr <base64 kind-27235 event>`) and this route requires
 the event `payload` tag to equal the SHA-256 hash of the exact UTF-8 JSON body.
 A valid register or disable returns `204 No Content`.
+
+FCM delivery uses the Firebase Admin SDK and Application Default Credentials.
+UnifiedPush delivery uses encrypted Web Push (`aes128gcm`); registrations must
+include the endpoint's `p256dh` public key and `auth` secret. Push payloads contain
+notification text and an optional NIP-19 `nevent` reference with relay hints, but
+never the public email body.
 
 ### Plans
 

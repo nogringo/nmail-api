@@ -8,11 +8,13 @@ import type {
   IdentityInput,
   IdentityRepository,
   IdentityVisibility,
+  InboundNotificationRepository,
   OutboundSendCounts,
   Plan,
   PlanLimits,
   PolicyRepository,
   PushSubscriptionInput,
+  PushSubscription,
   PushSubscriptionRepository,
   PushTransportType,
   RoleMessage,
@@ -35,6 +37,7 @@ export class MemoryIdentityRepository
     PolicyRepository,
     DomainRepository,
     RoleMessageRepository,
+    InboundNotificationRepository,
     PushSubscriptionRepository
 {
   readonly identities = new Map<string, AdminIdentity>()
@@ -44,6 +47,7 @@ export class MemoryIdentityRepository
   readonly sends: SendEntry[] = []
   readonly roleMessages: RoleMessage[] = []
   readonly pushSubscriptions = new Map<string, PushSubscriptionInput>()
+  readonly inboundNotificationDeliveries = new Set<string>()
   fail = false
   private nextId = 1
 
@@ -328,6 +332,40 @@ export class MemoryIdentityRepository
     return this.pushSubscriptions.delete(pushKey(pubkey, transport, destination))
   }
 
+  async listPushSubscriptions(pubkeys: string[]): Promise<PushSubscription[]> {
+    if (this.fail) throw new Error('database unavailable')
+
+    const recipients = new Set(pubkeys)
+    return [...this.pushSubscriptions.values()]
+      .filter((subscription) => recipients.has(subscription.pubkey))
+      .sort((left, right) =>
+        `${left.pubkey}:${left.transport}:${left.destination}`.localeCompare(
+          `${right.pubkey}:${right.transport}:${right.destination}`,
+        ),
+      )
+      .map((subscription) => ({
+        ...subscription,
+        p256dh: subscription.p256dh ?? null,
+        auth: subscription.auth ?? null,
+        instance: subscription.instance ?? null,
+      }))
+  }
+
+  async claimInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<boolean> {
+    if (this.fail) throw new Error('database unavailable')
+
+    const deliveryKey = inboundNotificationDeliveryKey(recipientPubkey, eventId)
+    if (this.inboundNotificationDeliveries.has(deliveryKey)) return false
+    this.inboundNotificationDeliveries.add(deliveryKey)
+    return true
+  }
+
+  async releaseInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<void> {
+    if (this.fail) throw new Error('database unavailable')
+
+    this.inboundNotificationDeliveries.delete(inboundNotificationDeliveryKey(recipientPubkey, eventId))
+  }
+
   private readonly roleHashes = new Set<string>()
 
   private ensureAccount(pubkey: string): Account {
@@ -357,6 +395,10 @@ function key(domain: string, localPart: string): string {
 
 function pushKey(pubkey: string, transport: PushTransportType, destination: string): string {
   return `${pubkey}:${transport}:${destination}`
+}
+
+function inboundNotificationDeliveryKey(recipientPubkey: string, eventId: string): string {
+  return `${recipientPubkey}:${eventId}`
 }
 
 function toAdminIdentity(id: string, identity: UserIdentity): AdminIdentity {
