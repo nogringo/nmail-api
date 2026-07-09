@@ -1,10 +1,12 @@
 import { buildApp } from './app.js'
 import { loadConfig } from './config.js'
+import { createPushNotificationDispatcher } from './pushNotificationDispatcher.js'
 import { PgIdentityRepository } from './repository.js'
 
 const config = loadConfig()
 const repo = new PgIdentityRepository(config.databaseUrl)
-const app = await buildApp(repo, config)
+const pushNotificationDispatcher = createPushNotificationDispatcher(repo, config)
+const app = await buildApp(repo, config, pushNotificationDispatcher)
 
 const shutdown = async () => {
   await app.close()

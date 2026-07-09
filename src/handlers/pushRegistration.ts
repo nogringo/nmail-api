@@ -64,13 +64,13 @@ function parsePushRegistrationPayload(value: unknown): PushRegistrationPayload |
   const payload = value as { action?: unknown; transport?: unknown }
   if (payload.action !== 'register' && payload.action !== 'disable') return null
 
-  const transport = parseTransport(payload.transport)
+  const transport = parseTransport(payload.transport, payload.action === 'register')
   if (!transport) return null
 
   return { action: payload.action, transport }
 }
 
-function parseTransport(value: unknown): PushTransport | null {
+function parseTransport(value: unknown, requireEncryptionKeys: boolean): PushTransport | null {
   if (!value || typeof value !== 'object') return null
 
   const transport = value as Record<string, unknown>
@@ -80,19 +80,32 @@ function parseTransport(value: unknown): PushTransport | null {
   }
 
   if (transport.type === 'unifiedpush') {
-    const endpoint = nonEmptyString(transport.endpoint)
-    if (!endpoint) return null
+    const endpoint = validWebPushEndpoint(transport.endpoint)
+    const p256dh = nonEmptyString(transport.p256dh)
+    const auth = nonEmptyString(transport.auth)
+    if (!endpoint || (requireEncryptionKeys && (!p256dh || !auth))) return null
 
     return {
       type: 'unifiedpush',
       endpoint,
-      p256dh: optionalString(transport.p256dh),
-      auth: optionalString(transport.auth),
+      ...(p256dh ? { p256dh } : {}),
+      ...(auth ? { auth } : {}),
       instance: optionalString(transport.instance),
     }
   }
 
   return null
+}
+
+function validWebPushEndpoint(value: unknown): string | null {
+  const endpoint = nonEmptyString(value)
+  if (!endpoint) return null
+
+  try {
+    return new URL(endpoint).protocol === 'https:' ? endpoint : null
+  } catch {
+    return null
+  }
 }
 
 function toSubscriptionInput(pubkey: string, transport: PushTransport): PushSubscriptionInput {

@@ -86,7 +86,7 @@ test('POST registers an FCM subscription for the signing pubkey', async () => {
   await app.close()
 })
 
-test('POST registers a UnifiedPush subscription with optional fields', async () => {
+test('POST registers a UnifiedPush subscription with encryption keys', async () => {
   const { repo, app } = await buildPushApp()
 
   const result = await post(app, {
@@ -162,6 +162,32 @@ test('POST disables a push subscription idempotently', async () => {
   await app.close()
 })
 
+test('POST disables a UnifiedPush subscription using only its endpoint', async () => {
+  const { repo, app } = await buildPushApp()
+  const sk = generateSecretKey()
+  const transport = {
+    type: 'unifiedpush',
+    endpoint: 'https://push.example/abc',
+    p256dh: 'key',
+    auth: 'auth-secret',
+  }
+
+  assert.equal((await post(app, { action: 'register', transport }, { sk })).statusCode, 204)
+  assert.equal(
+    (
+      await post(
+        app,
+        { action: 'disable', transport: { type: 'unifiedpush', endpoint: transport.endpoint } },
+        { sk },
+      )
+    ).statusCode,
+    204,
+  )
+  assert.equal(repo.pushSubscriptions.size, 0)
+
+  await app.close()
+})
+
 test('POST rejects missing or invalid NIP-98 authentication', async () => {
   const { app } = await buildPushApp()
   const body = { action: 'register', transport: { type: 'fcm', token: 'token-1' } }
@@ -207,6 +233,15 @@ test('POST rejects invalid push registration bodies', async () => {
     { action: 'sync', transport: { type: 'fcm', token: 'token-1' } },
     { action: 'register', transport: { type: 'fcm', token: '' } },
     { action: 'register', transport: { type: 'unifiedpush', endpoint: '' } },
+    {
+      action: 'register',
+      transport: { type: 'unifiedpush', endpoint: 'http://push.example/abc', p256dh: 'key', auth: 'auth-secret' },
+    },
+    { action: 'register', transport: { type: 'unifiedpush', endpoint: 'https://push.example/abc' } },
+    {
+      action: 'register',
+      transport: { type: 'unifiedpush', endpoint: 'https://push.example/abc', p256dh: 'key' },
+    },
     { action: 'register', transport: { type: 'apns', token: 'token-1' } },
   ]) {
     const result = await post(app, body)

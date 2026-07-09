@@ -3,6 +3,9 @@ export interface AppConfig {
   databaseUrl: string
   inboundDecisionToken: string
   inboundNotificationToken?: string
+  webPushVapidSubject?: string
+  webPushVapidPublicKey?: string
+  webPushVapidPrivateKey?: string
   outboundDecisionToken?: string
   outboundMaxBodyBytes: number
   adminPassword?: string

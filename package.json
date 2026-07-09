@@ -22,12 +22,15 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/formbody": "^8.0.2",
     "fastify": "^5.8.5",
+    "firebase-admin": "^14.1.0",
     "nostr-tools": "^2.23.7",
-    "pg": "^8.21.0"
+    "pg": "^8.21.0",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
     "@types/pg": "^8.20.0",
+    "@types/web-push": "^3.6.4",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
