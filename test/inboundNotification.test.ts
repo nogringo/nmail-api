@@ -12,6 +12,7 @@ const appConfig = {
 const recipient = '0'.repeat(64)
 const otherRecipient = '1'.repeat(64)
 const relayPubkey = '2'.repeat(64)
+const relays = ['wss://relay.example.net']
 
 function captureDispatcher(deliveries: InboundNotification[]): PushNotificationDispatcher {
   return {
@@ -47,15 +48,16 @@ test('POST accepts an email notification and dispatches matching push subscripti
   const app = await buildApp(repo, appConfig, captureDispatcher(deliveries))
 
   const response = await post(app, {
-    giftWrap: {
+    recipientPubkey: recipient.toUpperCase(),
+    relays,
+    event: {
       id: 'a'.repeat(64),
       pubkey: 'b'.repeat(64),
       created_at: 1_789_999_999,
-      kind: 1059,
-      tags: [
-        ['p', recipient],
-        ['p', recipient],
-      ],
+      kind: 1,
+      tags: [['p', recipient]],
+      content: 'Public email body',
+      sig: 'c'.repeat(128),
     },
     email: {
       from: { address: 'alice@example.net', name: 'Alice' },
@@ -67,7 +69,10 @@ test('POST accepts an email notification and dispatches matching push subscripti
   assert.equal(response.statusCode, 202)
   assert.deepEqual(response.json(), { status: 'accepted' })
   assert.equal(deliveries.length, 1)
-  assert.deepEqual(deliveries[0].recipientPubkeys, [recipient])
+  assert.equal(deliveries[0].recipientPubkey, recipient)
+  assert.deepEqual(deliveries[0].relays, relays)
+  assert.equal(deliveries[0].event.content, 'Public email body')
+  assert.equal(deliveries[0].event.sig, 'c'.repeat(128))
   assert.deepEqual(deliveries[0].subscriptions, [
     {
       pubkey: recipient,
@@ -101,14 +106,15 @@ test('POST accepts a generic gift wrap notification with authenticated pubkeys',
   const app = await buildApp(repo, appConfig, captureDispatcher(deliveries))
 
   const response = await post(app, {
-    giftWrap: {
-      tags: [['p', recipient.toUpperCase()]],
-    },
+    recipientPubkey: recipient,
+    relays: [...relays, ...relays],
+    event: { tags: [['p', otherRecipient]] },
     authenticatedPubkeys: [relayPubkey.toUpperCase(), relayPubkey],
   })
 
   assert.equal(response.statusCode, 202)
-  assert.deepEqual(deliveries[0].recipientPubkeys, [recipient])
+  assert.equal(deliveries[0].recipientPubkey, recipient)
+  assert.deepEqual(deliveries[0].relays, relays)
   assert.deepEqual(deliveries[0].authenticatedPubkeys, [relayPubkey])
   assert.equal(deliveries[0].subscriptions[0].transport, 'unifiedpush')
   assert.equal(deliveries[0].email, undefined)
@@ -119,7 +125,7 @@ test('POST accepts a generic gift wrap notification with authenticated pubkeys',
 test('POST uses INBOUND_NOTIFICATION_TOKEN only', async () => {
   const repo = new MemoryIdentityRepository()
   const app = await buildApp(repo, appConfig)
-  const payload = { giftWrap: { tags: [['p', recipient]] }, authenticatedPubkeys: [] }
+  const payload = { recipientPubkey: recipient, relays, event: {}, authenticatedPubkeys: [] }
 
   const decisionToken = await post(app, payload, 'Bearer secret-token')
   assert.equal(decisionToken.statusCode, 401)
@@ -133,7 +139,7 @@ test('POST uses INBOUND_NOTIFICATION_TOKEN only', async () => {
 test('POST rejects every bearer when INBOUND_NOTIFICATION_TOKEN is not configured', async () => {
   const repo = new MemoryIdentityRepository()
   const app = await buildApp(repo, { inboundDecisionToken: 'secret-token' })
-  const payload = { giftWrap: { tags: [['p', recipient]] } }
+  const payload = { recipientPubkey: recipient, relays, event: {} }
 
   const response = await post(app, payload, 'Bearer secret-token')
 
@@ -146,7 +152,7 @@ test('POST rejects every bearer when INBOUND_NOTIFICATION_TOKEN is not configure
 test('POST rejects missing or invalid bearer authentication', async () => {
   const repo = new MemoryIdentityRepository()
   const app = await buildApp(repo, appConfig)
-  const payload = { giftWrap: { tags: [['p', recipient]] } }
+  const payload = { recipientPubkey: recipient, relays, event: {} }
 
   const missing = await post(app, payload, '')
   assert.equal(missing.statusCode, 401)
@@ -167,12 +173,15 @@ test('POST rejects invalid notification payloads', async () => {
 
   for (const body of [
     {},
-    { giftWrap: {} },
-    { giftWrap: { content: 'encrypted', tags: [['p', recipient]] } },
-    { giftWrap: { sig: 'signature', tags: [['p', recipient]] } },
-    { giftWrap: { tags: [['p', 'not-a-pubkey']] } },
-    { giftWrap: { tags: [['p', recipient]] }, email: { rawMime: 'message' } },
-    { giftWrap: { tags: [['p', recipient]] }, authenticatedPubkeys: ['bad'] },
+    { recipientPubkey: 'not-a-pubkey', relays, event: {} },
+    { recipientPubkey: recipient, event: {} },
+    { recipientPubkey: recipient, relays: ['https://relay.example.net'], event: {} },
+    { recipientPubkey: recipient, relays, event: { content: 'encrypted' } },
+    { recipientPubkey: recipient, relays, event: { sig: 'a'.repeat(128) } },
+    { recipientPubkey: recipient, relays, event: {}, email: { rawMime: 'message' } },
+    { recipientPubkey: recipient, relays, event: {}, email: { subject: 'Missing public event body' } },
+    { recipientPubkey: recipient, relays, event: {}, authenticatedPubkeys: ['bad'] },
+    { giftWrap: { tags: [['p', recipient]] } },
   ]) {
     const response = await post(app, body)
     assert.equal(response.statusCode, 400)
@@ -187,7 +196,7 @@ test('POST returns 503 when push subscription lookup or dispatch fails', async (
   repo.fail = true
   const app = await buildApp(repo, appConfig)
 
-  const response = await post(app, { giftWrap: { tags: [['p', recipient]] } })
+  const response = await post(app, { recipientPubkey: recipient, relays, event: {} })
 
   assert.equal(response.statusCode, 503)
   assert.equal(response.json().error, 'notification_unavailable')

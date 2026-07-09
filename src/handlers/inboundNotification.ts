@@ -3,7 +3,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import type {
   AppConfig,
   InboundNotificationEmailMetadata,
-  InboundNotificationGiftWrap,
+  InboundNotificationEvent,
   PushNotificationDispatcher,
   PushSubscriptionRepository,
 } from '../types.js'
@@ -29,14 +29,12 @@ export function createInboundNotificationHandler(
     const payload = parseNotificationPayload(request.body)
     if (!payload) return reply.code(400).send({ error: 'invalid_notification_payload' })
 
-    const recipientPubkeys = extractRecipientPubkeys(payload.giftWrap)
-    if (recipientPubkeys.length === 0) return reply.code(400).send({ error: 'invalid_notification_payload' })
-
     try {
-      const subscriptions = await repo.listPushSubscriptions(recipientPubkeys)
+      const subscriptions = await repo.listPushSubscriptions([payload.recipientPubkey])
       await dispatcher.dispatch({
-        giftWrap: payload.giftWrap,
-        recipientPubkeys,
+        recipientPubkey: payload.recipientPubkey,
+        relays: payload.relays,
+        event: payload.event,
         authenticatedPubkeys: payload.authenticatedPubkeys,
         email: payload.email,
         subscriptions,
@@ -62,7 +60,9 @@ function isAuthorizedNotificationRequest(request: FastifyRequest, expectedToken:
 }
 
 function parseNotificationPayload(value: unknown): {
-  giftWrap: InboundNotificationGiftWrap
+  recipientPubkey: string
+  relays: string[]
+  event: InboundNotificationEvent
   email?: InboundNotificationEmailMetadata
   authenticatedPubkeys: string[]
 } | null {
@@ -71,8 +71,11 @@ function parseNotificationPayload(value: unknown): {
   const payload = value as Record<string, unknown>
   if (hasForbiddenEmailBody(payload)) return null
 
-  const giftWrap = parseGiftWrap(payload.giftWrap)
-  if (!giftWrap) return null
+  const recipientPubkey = optionalHex64(payload.recipientPubkey)
+  if (!recipientPubkey) return null
+
+  const relays = parseRelays(payload.relays)
+  if (!relays) return null
 
   const authenticatedPubkeys = parsePubkeyArray(payload.authenticatedPubkeys)
   if (!authenticatedPubkeys) return null
@@ -80,14 +83,25 @@ function parseNotificationPayload(value: unknown): {
   const email = parseEmailMetadata(payload.email)
   if (email === null) return null
 
-  return email === undefined ? { giftWrap, authenticatedPubkeys } : { giftWrap, authenticatedPubkeys, email }
+  const event = parseEvent(payload.event, email !== undefined)
+  if (!event) return null
+
+  const parsed = { recipientPubkey, relays, event, authenticatedPubkeys }
+  return email === undefined ? parsed : { ...parsed, email }
 }
 
-function parseGiftWrap(value: unknown): InboundNotificationGiftWrap | null {
+function parseEvent(value: unknown, isPublicEmail: boolean): InboundNotificationEvent | null {
   if (!value || typeof value !== 'object') return null
 
   const event = value as Record<string, unknown>
-  if (Object.hasOwn(event, 'content') || Object.hasOwn(event, 'sig')) return null
+  const content = typeof event.content === 'string' ? event.content : undefined
+  const sig = optionalHex(event.sig, 128)
+
+  if (isPublicEmail) {
+    if (content === undefined || !sig) return null
+  } else if (Object.hasOwn(event, 'content') || Object.hasOwn(event, 'sig')) {
+    return null
+  }
 
   const tags = parseTags(event.tags)
   if (!tags) return null
@@ -110,7 +124,32 @@ function parseGiftWrap(value: unknown): InboundNotificationGiftWrap | null {
     ...(pubkey ? { pubkey } : {}),
     ...(createdAt !== undefined ? { created_at: createdAt } : {}),
     ...(kind !== undefined ? { kind } : {}),
+    ...(content !== undefined ? { content } : {}),
+    ...(sig ? { sig } : {}),
   }
+}
+
+function parseRelays(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+
+  const relays = new Set<string>()
+  for (const entry of value) {
+    if (typeof entry !== 'string') return null
+
+    const relay = entry.trim()
+    if (!relay) return null
+
+    try {
+      const url = new URL(relay)
+      if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return null
+    } catch {
+      return null
+    }
+
+    relays.add(relay)
+  }
+
+  return [...relays]
 }
 
 function parseTags(value: unknown): string[][] | null {
@@ -176,27 +215,19 @@ function parsePubkeyArray(value: unknown): string[] | null {
   return [...pubkeys]
 }
 
-function extractRecipientPubkeys(giftWrap: InboundNotificationGiftWrap): string[] {
-  const recipients = new Set<string>()
-  for (const tag of giftWrap.tags) {
-    if (tag[0] !== 'p') continue
-
-    const pubkey = optionalHex64(tag[1])
-    if (pubkey) recipients.add(pubkey)
-  }
-
-  return [...recipients]
-}
-
 function hasForbiddenEmailBody(value: Record<string, unknown>): boolean {
   return Object.keys(value).some((key) => FORBIDDEN_EMAIL_FIELDS.has(key))
 }
 
 function optionalHex64(value: unknown): string | undefined {
+  return optionalHex(value, 64)
+}
+
+function optionalHex(value: unknown, length: number): string | undefined {
   if (typeof value !== 'string') return undefined
 
   const normalized = value.trim().toLowerCase()
-  return /^[0-9a-f]{64}$/.test(normalized) ? normalized : undefined
+  return new RegExp(`^[0-9a-f]{${length}}$`).test(normalized) ? normalized : undefined
 }
 
 function optionalSafeInteger(value: unknown): number | undefined {

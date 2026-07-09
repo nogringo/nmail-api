@@ -225,17 +225,20 @@ export interface InboundNotificationEmailMetadata {
   preview?: string
 }
 
-export interface InboundNotificationGiftWrap {
+export interface InboundNotificationEvent {
   id?: string
   pubkey?: string
   created_at?: number
   kind?: number
   tags: string[][]
+  content?: string
+  sig?: string
 }
 
 export interface InboundNotification {
-  giftWrap: InboundNotificationGiftWrap
-  recipientPubkeys: string[]
+  recipientPubkey: string
+  relays: string[]
+  event: InboundNotificationEvent
   authenticatedPubkeys: string[]
   email?: InboundNotificationEmailMetadata
   subscriptions: PushSubscription[]
