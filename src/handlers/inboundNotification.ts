@@ -2,13 +2,15 @@ import { timingSafeEqual } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import type {
   AppConfig,
+  InboundNotificationRepository,
   InboundNotificationEmailMetadata,
   InboundNotificationEvent,
   PushNotificationDispatcher,
-  PushSubscriptionRepository,
 } from '../types.js'
 
 const FORBIDDEN_EMAIL_FIELDS = new Set(['rawMime', 'body', 'bodyMime', 'content', 'html', 'text'])
+const MAX_NOTIFICATION_EVENT_AGE_SECONDS = 7 * 24 * 60 * 60
+const MAX_NOTIFICATION_EVENT_FUTURE_SKEW_SECONDS = 10 * 60
 
 const noopPushNotificationDispatcher: PushNotificationDispatcher = {
   async dispatch() {
@@ -17,7 +19,7 @@ const noopPushNotificationDispatcher: PushNotificationDispatcher = {
 }
 
 export function createInboundNotificationHandler(
-  repo: PushSubscriptionRepository,
+  repo: InboundNotificationRepository,
   config: Pick<AppConfig, 'inboundNotificationToken'>,
   dispatcher: PushNotificationDispatcher = noopPushNotificationDispatcher,
 ) {
@@ -29,7 +31,19 @@ export function createInboundNotificationHandler(
     const payload = parseNotificationPayload(request.body)
     if (!payload) return reply.code(400).send({ error: 'invalid_notification_payload' })
 
+    if (shouldSkipNotificationEvent(payload.event, Math.floor(Date.now() / 1000))) {
+      return reply.code(202).send({ status: 'accepted' })
+    }
+
+    let claimedDelivery: { recipientPubkey: string; eventId: string } | null = null
+
     try {
+      if (payload.event.id) {
+        const claimed = await repo.claimInboundNotificationDelivery(payload.recipientPubkey, payload.event.id)
+        if (!claimed) return reply.code(202).send({ status: 'accepted' })
+        claimedDelivery = { recipientPubkey: payload.recipientPubkey, eventId: payload.event.id }
+      }
+
       const subscriptions = await repo.listPushSubscriptions([payload.recipientPubkey])
       await dispatcher.dispatch({
         recipientPubkey: payload.recipientPubkey,
@@ -42,6 +56,13 @@ export function createInboundNotificationHandler(
 
       return reply.code(202).send({ status: 'accepted' })
     } catch (error) {
+      if (claimedDelivery) {
+        try {
+          await repo.releaseInboundNotificationDelivery(claimedDelivery.recipientPubkey, claimedDelivery.eventId)
+        } catch (releaseError) {
+          request.log.error({ error: releaseError }, 'Inbound notification delivery claim release failed')
+        }
+      }
       request.log.error({ error }, 'Inbound notification dispatch failed')
       return reply.code(503).send({ error: 'notification_unavailable' })
     }
@@ -113,16 +134,16 @@ function parseEvent(value: unknown, isPublicEmail: boolean): InboundNotification
   if (event.pubkey !== undefined && !pubkey) return null
 
   const createdAt = optionalSafeInteger(event.created_at)
-  if (event.created_at !== undefined && createdAt === undefined) return null
+  if (createdAt === undefined) return null
 
   const kind = optionalSafeInteger(event.kind)
   if (event.kind !== undefined && kind === undefined) return null
 
   return {
     tags,
+    created_at: createdAt,
     ...(id ? { id } : {}),
     ...(pubkey ? { pubkey } : {}),
-    ...(createdAt !== undefined ? { created_at: createdAt } : {}),
     ...(kind !== undefined ? { kind } : {}),
     ...(content !== undefined ? { content } : {}),
     ...(sig ? { sig } : {}),
@@ -150,6 +171,13 @@ function parseRelays(value: unknown): string[] | null {
   }
 
   return [...relays]
+}
+
+function shouldSkipNotificationEvent(event: InboundNotificationEvent, nowSeconds: number): boolean {
+  return (
+    event.created_at < nowSeconds - MAX_NOTIFICATION_EVENT_AGE_SECONDS ||
+    event.created_at > nowSeconds + MAX_NOTIFICATION_EVENT_FUTURE_SKEW_SECONDS
+  )
 }
 
 function parseTags(value: unknown): string[][] | null {

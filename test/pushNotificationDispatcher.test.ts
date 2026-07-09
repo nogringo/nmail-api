@@ -107,7 +107,7 @@ test('dispatcher uses generic text and omits nevent when the event has no id', a
     async sendWebPush() {},
   })
   const generic = notification([fcmSubscription()])
-  generic.event = { tags: [] }
+  generic.event = { created_at: Math.floor(Date.now() / 1000), tags: [] }
   generic.email = undefined
 
   await dispatcher.dispatch(generic)

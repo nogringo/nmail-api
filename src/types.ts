@@ -219,6 +219,11 @@ export interface PushSubscriptionRepository {
   listPushSubscriptions(pubkeys: string[]): Promise<PushSubscription[]>
 }
 
+export interface InboundNotificationRepository extends PushSubscriptionRepository {
+  claimInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<boolean>
+  releaseInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<void>
+}
+
 export interface InboundNotificationEmailMetadata {
   from?: {
     address: string
@@ -231,7 +236,7 @@ export interface InboundNotificationEmailMetadata {
 export interface InboundNotificationEvent {
   id?: string
   pubkey?: string
-  created_at?: number
+  created_at: number
   kind?: number
   tags: string[][]
   content?: string

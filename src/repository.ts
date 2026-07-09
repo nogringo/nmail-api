@@ -9,6 +9,7 @@ import type {
   IdentityInput,
   IdentityRepository,
   IdentityVisibility,
+  InboundNotificationRepository,
   OutboundSendCounts,
   Plan,
   PlanLimits,
@@ -93,6 +94,7 @@ export class PgIdentityRepository
     PolicyRepository,
     DomainRepository,
     RoleMessageRepository,
+    InboundNotificationRepository,
     PushSubscriptionRepository
 {
   private readonly pool: pg.Pool
@@ -581,6 +583,29 @@ export class PgIdentityRepository
     )
 
     return result.rows.map(toPushSubscription)
+  }
+
+  async claimInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `
+        insert into inbound_notification_deliveries (recipient_pubkey, event_id)
+        values ($1, $2)
+        on conflict (recipient_pubkey, event_id) do nothing
+      `,
+      [recipientPubkey, eventId],
+    )
+
+    return (result.rowCount ?? 0) > 0
+  }
+
+  async releaseInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<void> {
+    await this.pool.query(
+      `
+        delete from inbound_notification_deliveries
+        where recipient_pubkey = $1 and event_id = $2
+      `,
+      [recipientPubkey, eventId],
+    )
   }
 
   async close(): Promise<void> {

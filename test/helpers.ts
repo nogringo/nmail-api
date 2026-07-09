@@ -8,6 +8,7 @@ import type {
   IdentityInput,
   IdentityRepository,
   IdentityVisibility,
+  InboundNotificationRepository,
   OutboundSendCounts,
   Plan,
   PlanLimits,
@@ -36,6 +37,7 @@ export class MemoryIdentityRepository
     PolicyRepository,
     DomainRepository,
     RoleMessageRepository,
+    InboundNotificationRepository,
     PushSubscriptionRepository
 {
   readonly identities = new Map<string, AdminIdentity>()
@@ -45,6 +47,7 @@ export class MemoryIdentityRepository
   readonly sends: SendEntry[] = []
   readonly roleMessages: RoleMessage[] = []
   readonly pushSubscriptions = new Map<string, PushSubscriptionInput>()
+  readonly inboundNotificationDeliveries = new Set<string>()
   fail = false
   private nextId = 1
 
@@ -348,6 +351,21 @@ export class MemoryIdentityRepository
       }))
   }
 
+  async claimInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<boolean> {
+    if (this.fail) throw new Error('database unavailable')
+
+    const deliveryKey = inboundNotificationDeliveryKey(recipientPubkey, eventId)
+    if (this.inboundNotificationDeliveries.has(deliveryKey)) return false
+    this.inboundNotificationDeliveries.add(deliveryKey)
+    return true
+  }
+
+  async releaseInboundNotificationDelivery(recipientPubkey: string, eventId: string): Promise<void> {
+    if (this.fail) throw new Error('database unavailable')
+
+    this.inboundNotificationDeliveries.delete(inboundNotificationDeliveryKey(recipientPubkey, eventId))
+  }
+
   private readonly roleHashes = new Set<string>()
 
   private ensureAccount(pubkey: string): Account {
@@ -377,6 +395,10 @@ function key(domain: string, localPart: string): string {
 
 function pushKey(pubkey: string, transport: PushTransportType, destination: string): string {
   return `${pubkey}:${transport}:${destination}`
+}
+
+function inboundNotificationDeliveryKey(recipientPubkey: string, eventId: string): string {
+  return `${recipientPubkey}:${eventId}`
 }
 
 function toAdminIdentity(id: string, identity: UserIdentity): AdminIdentity {

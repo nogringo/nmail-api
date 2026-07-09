@@ -14,8 +14,8 @@ import type {
   AppConfig,
   DomainRepository,
   IdentityRepository,
+  InboundNotificationRepository,
   PolicyRepository,
-  PushSubscriptionRepository,
   PushNotificationDispatcher,
   RoleMessageRepository,
 } from './types.js'
@@ -28,7 +28,7 @@ export async function buildApp(
     PolicyRepository &
     DomainRepository &
     RoleMessageRepository &
-    PushSubscriptionRepository,
+    InboundNotificationRepository,
   config: Pick<AppConfig, 'inboundDecisionToken' | 'outboundDecisionToken' | 'adminPassword' | 'roleWebhookSigningKey'> & {
     inboundNotificationToken?: string
     outboundMaxBodyBytes?: number
