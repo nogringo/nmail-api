@@ -104,26 +104,17 @@ function parseNotificationPayload(value: unknown): {
   const email = parseEmailMetadata(payload.email)
   if (email === null) return null
 
-  const event = parseEvent(payload.event, email !== undefined)
+  const event = parseEvent(payload.event)
   if (!event) return null
 
   const parsed = { recipientPubkey, relays, event, authenticatedPubkeys }
   return email === undefined ? parsed : { ...parsed, email }
 }
 
-function parseEvent(value: unknown, isPublicEmail: boolean): InboundNotificationEvent | null {
+function parseEvent(value: unknown): InboundNotificationEvent | null {
   if (!value || typeof value !== 'object') return null
 
   const event = value as Record<string, unknown>
-  const content = typeof event.content === 'string' ? event.content : undefined
-  const sig = optionalHex(event.sig, 128)
-
-  if (isPublicEmail) {
-    if (content === undefined || !sig) return null
-  } else if (Object.hasOwn(event, 'content') || Object.hasOwn(event, 'sig')) {
-    return null
-  }
-
   const tags = parseTags(event.tags)
   if (!tags) return null
 
@@ -139,14 +130,21 @@ function parseEvent(value: unknown, isPublicEmail: boolean): InboundNotification
   const kind = optionalSafeInteger(event.kind)
   if (event.kind !== undefined && kind === undefined) return null
 
+  const isGiftWrap = kind === 1059
+  const content = parseOptionalString(event.content)
+  if (!isGiftWrap && event.content !== undefined && content === undefined) return null
+
+  const sig = optionalHex(event.sig, 128)
+  if (!isGiftWrap && event.sig !== undefined && !sig) return null
+
   return {
     tags,
     created_at: createdAt,
     ...(id ? { id } : {}),
     ...(pubkey ? { pubkey } : {}),
     ...(kind !== undefined ? { kind } : {}),
-    ...(content !== undefined ? { content } : {}),
-    ...(sig ? { sig } : {}),
+    ...(!isGiftWrap && content !== undefined ? { content } : {}),
+    ...(!isGiftWrap && sig ? { sig } : {}),
   }
 }
 
@@ -267,6 +265,10 @@ function optionalNonEmptyString(value: unknown): string | undefined {
 
   const trimmed = value.trim()
   return trimmed ? trimmed : undefined
+}
+
+function parseOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
 }
 
 function firstHeaderValue(value: string | string[] | undefined): string {

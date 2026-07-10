@@ -233,6 +233,67 @@ test('POST accepts a generic gift wrap notification with authenticated pubkeys',
   await app.close()
 })
 
+test('POST accepts email metadata with a gift wrap event', async () => {
+  const repo = new MemoryIdentityRepository()
+  await repo.upsertPushSubscription({ pubkey: recipient, transport: 'fcm', destination: 'fcm-token' })
+  const deliveries: InboundNotification[] = []
+  const app = await buildApp(repo, appConfig, captureDispatcher(deliveries))
+
+  const response = await post(app, {
+    recipientPubkey: recipient,
+    relays,
+    event: nostrEvent({
+      id: 'a'.repeat(64),
+      kind: 1059,
+      tags: [['p', recipient]],
+    }),
+    email: {
+      from: { address: 'alice@example.net' },
+      subject: 'Wrapped hello',
+    },
+  })
+
+  assert.equal(response.statusCode, 202)
+  assert.equal(deliveries.length, 1)
+  assert.equal(deliveries[0].event.kind, 1059)
+  assert.equal(deliveries[0].event.content, undefined)
+  assert.equal(deliveries[0].event.sig, undefined)
+  assert.deepEqual(deliveries[0].email, {
+    from: { address: 'alice@example.net' },
+    subject: 'Wrapped hello',
+  })
+
+  await app.close()
+})
+
+test('POST ignores gift wrap content and sig when callers include them', async () => {
+  const repo = new MemoryIdentityRepository()
+  await repo.upsertPushSubscription({ pubkey: recipient, transport: 'fcm', destination: 'fcm-token' })
+  const deliveries: InboundNotification[] = []
+  const app = await buildApp(repo, appConfig, captureDispatcher(deliveries))
+
+  const response = await post(app, {
+    recipientPubkey: recipient,
+    relays,
+    event: nostrEvent({
+      id: 'b'.repeat(64),
+      kind: 1059,
+      tags: [['p', recipient]],
+      content: 'encrypted gift wrap payload',
+      sig: 'not-validated-for-gift-wraps',
+    }),
+    authenticatedPubkeys: [relayPubkey],
+  })
+
+  assert.equal(response.statusCode, 202)
+  assert.equal(deliveries.length, 1)
+  assert.equal(deliveries[0].event.kind, 1059)
+  assert.equal(deliveries[0].event.content, undefined)
+  assert.equal(deliveries[0].event.sig, undefined)
+
+  await app.close()
+})
+
 test('POST uses INBOUND_NOTIFICATION_TOKEN only', async () => {
   const repo = new MemoryIdentityRepository()
   const app = await buildApp(repo, appConfig)
@@ -288,10 +349,10 @@ test('POST rejects invalid notification payloads', async () => {
     { recipientPubkey: recipient, event: {} },
     { recipientPubkey: recipient, relays: ['https://relay.example.net'], event: nostrEvent() },
     { recipientPubkey: recipient, relays, event: {} },
-    { recipientPubkey: recipient, relays, event: nostrEvent({ content: 'encrypted' }) },
-    { recipientPubkey: recipient, relays, event: nostrEvent({ sig: 'a'.repeat(128) }) },
+    { recipientPubkey: recipient, relays, event: nostrEvent({ content: 123 }) },
+    { recipientPubkey: recipient, relays, event: nostrEvent({ sig: 'bad' }) },
     { recipientPubkey: recipient, relays, event: {}, email: { rawMime: 'message' } },
-    { recipientPubkey: recipient, relays, event: {}, email: { subject: 'Missing public event body' } },
+    { recipientPubkey: recipient, relays, event: nostrEvent(), email: { from: { name: 'Missing address' } } },
     { recipientPubkey: recipient, relays, event: nostrEvent(), authenticatedPubkeys: ['bad'] },
     { giftWrap: { tags: [['p', recipient]] } },
   ]) {
