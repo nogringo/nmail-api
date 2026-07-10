@@ -82,6 +82,7 @@ interface PushSubscriptionRow {
   pubkey: string
   transport: PushTransportType
   destination: string
+  language: string
   p256dh: string | null
   auth: string | null
   instance: string | null
@@ -536,9 +537,10 @@ export class PgIdentityRepository
       await client.query('insert into accounts (pubkey) values ($1) on conflict (pubkey) do nothing', [input.pubkey])
       await client.query(
         `
-          insert into push_subscriptions (pubkey, transport, destination, p256dh, auth, instance)
-          values ($1, $2, $3, $4, $5, $6)
+          insert into push_subscriptions (pubkey, transport, destination, language, p256dh, auth, instance)
+          values ($1, $2, $3, $4, $5, $6, $7)
           on conflict (pubkey, transport, destination) do update set
+            language = excluded.language,
             p256dh = excluded.p256dh,
             auth = excluded.auth,
             instance = excluded.instance
@@ -547,6 +549,7 @@ export class PgIdentityRepository
           input.pubkey,
           input.transport,
           input.destination,
+          input.language ?? 'en',
           input.p256dh ?? null,
           input.auth ?? null,
           input.instance ?? null,
@@ -574,7 +577,7 @@ export class PgIdentityRepository
 
     const result = await this.pool.query<PushSubscriptionRow>(
       `
-        select pubkey, transport, destination, p256dh, auth, instance
+        select pubkey, transport, destination, language, p256dh, auth, instance
         from push_subscriptions
         where pubkey = any($1::char(64)[])
         order by pubkey asc, transport asc, destination asc
@@ -687,6 +690,7 @@ function toPushSubscription(row: PushSubscriptionRow): PushSubscription {
     pubkey: row.pubkey,
     transport: row.transport,
     destination: row.destination,
+    language: row.language,
     p256dh: row.p256dh,
     auth: row.auth,
     instance: row.instance,

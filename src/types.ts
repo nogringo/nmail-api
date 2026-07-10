@@ -199,6 +199,7 @@ export interface PushSubscriptionInput {
   pubkey: string
   transport: PushTransportType
   destination: string
+  language?: string
   p256dh?: string | null
   auth?: string | null
   instance?: string | null
@@ -208,6 +209,7 @@ export interface PushSubscription {
   pubkey: string
   transport: PushTransportType
   destination: string
+  language: string
   p256dh: string | null
   auth: string | null
   instance: string | null

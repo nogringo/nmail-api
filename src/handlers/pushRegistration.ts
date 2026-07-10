@@ -7,6 +7,7 @@ type PushRegistrationAction = 'register' | 'disable'
 
 interface PushRegistrationPayload {
   action: PushRegistrationAction
+  language?: string
   transport: PushTransport
 }
 
@@ -41,7 +42,7 @@ export function createPushRegistrationHandler(repo: PushSubscriptionRepository) 
     const payload = parsePushRegistrationPayload(request.body)
     if (!payload) return reply.code(400).send({ error: 'invalid_push_registration' })
 
-    const subscription = toSubscriptionInput(auth.pubkey, payload.transport)
+    const subscription = toSubscriptionInput(auth.pubkey, payload)
 
     try {
       if (payload.action === 'register') {
@@ -61,16 +62,23 @@ export function createPushRegistrationHandler(repo: PushSubscriptionRepository) 
 function parsePushRegistrationPayload(value: unknown): PushRegistrationPayload | null {
   if (!value || typeof value !== 'object') return null
 
-  const payload = value as { action?: unknown; transport?: unknown }
+  const payload = value as { action?: unknown; language?: unknown; transport?: unknown }
   if (payload.action !== 'register' && payload.action !== 'disable') return null
+
+  const language = payload.action === 'register' ? parseOptionalLanguage(payload.language) : undefined
+  if (payload.action === 'register' && payload.language !== undefined && !language) return null
 
   const transport = parseTransport(payload.transport, payload.action === 'register')
   if (!transport) return null
 
-  return { action: payload.action, transport }
+  return {
+    action: payload.action,
+    ...(language ? { language } : {}),
+    transport,
+  }
 }
 
-function parseTransport(value: unknown, requireEncryptionKeys: boolean): PushTransport | null {
+function parseTransport(value: unknown, isRegister: boolean): PushTransport | null {
   if (!value || typeof value !== 'object') return null
 
   const transport = value as Record<string, unknown>
@@ -83,14 +91,15 @@ function parseTransport(value: unknown, requireEncryptionKeys: boolean): PushTra
     const endpoint = validWebPushEndpoint(transport.endpoint)
     const p256dh = nonEmptyString(transport.p256dh)
     const auth = nonEmptyString(transport.auth)
-    if (!endpoint || (requireEncryptionKeys && (!p256dh || !auth))) return null
+    if (!endpoint) return null
+    if ((p256dh && !auth) || (!p256dh && auth)) return null
 
     return {
       type: 'unifiedpush',
       endpoint,
       ...(p256dh ? { p256dh } : {}),
       ...(auth ? { auth } : {}),
-      instance: optionalString(transport.instance),
+      ...(isRegister ? { instance: optionalString(transport.instance) } : {}),
     }
   }
 
@@ -108,15 +117,22 @@ function validWebPushEndpoint(value: unknown): string | null {
   }
 }
 
-function toSubscriptionInput(pubkey: string, transport: PushTransport): PushSubscriptionInput {
+function toSubscriptionInput(pubkey: string, payload: PushRegistrationPayload): PushSubscriptionInput {
+  const { transport } = payload
   if (transport.type === 'fcm') {
-    return { pubkey, transport: transport.type, destination: transport.token }
+    return {
+      pubkey,
+      transport: transport.type,
+      destination: transport.token,
+      ...(payload.language ? { language: payload.language } : {}),
+    }
   }
 
   return {
     pubkey,
     transport: transport.type,
     destination: transport.endpoint,
+    ...(payload.language ? { language: payload.language } : {}),
     p256dh: transport.p256dh ?? null,
     auth: transport.auth ?? null,
     instance: transport.instance ?? null,
@@ -137,6 +153,19 @@ function nonEmptyString(value: unknown): string | null {
 
   const trimmed = value.trim()
   return trimmed ? trimmed : null
+}
+
+function parseOptionalLanguage(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined
+
+  const language = nonEmptyString(value)
+  if (!language) return undefined
+
+  try {
+    return Intl.getCanonicalLocales(language)[0] ?? undefined
+  } catch {
+    return undefined
+  }
 }
 
 function optionalString(value: unknown): string | undefined {

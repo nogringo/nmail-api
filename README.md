@@ -6,7 +6,7 @@ TypeScript API for identity resolution and inbound mail policy:
 - `POST /inbound/decision` answers the inbound SMTP decision protocol.
 - `POST /outbound/decision` answers the outbound (nostr → SMTP) decision protocol, enabled only when `OUTBOUND_DECISION_TOKEN` is set.
 - `PUT/GET/DELETE /aliases[/{name}]` is the REST alias lifecycle (claim, list, release) authenticated with [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) (`Authorization: Nostr <base64 kind-27235 event>`); the signing pubkey owns the aliases it claims, served on the alias domain (request Host). Enforces the per-plan `max_aliases` limit (free 2, premium 10). See [docs/AliasProtocol.md](docs/AliasProtocol.md) and [docs/AccountModel.md](docs/AccountModel.md).
-- `POST /push/subscriptions` registers or disables app push destinations (FCM or UnifiedPush), authenticated with NIP-98 and its `payload` tag bound to the exact JSON body bytes.
+- `POST /push/subscriptions` registers or disables app push destinations (FCM or UnifiedPush), authenticated with NIP-98 and its `payload` tag bound to the exact JSON body bytes. Registration may include a BCP 47 `language` used for notification text; when omitted, English is used.
 - `POST /inbound/notifications` is the internal notification event route for trusted SMTP/relay services to trigger push delivery. See [docs/InboundNotificationProtocol.md](docs/InboundNotificationProtocol.md).
 - `POST /inbound/role` receives mail addressed to reserved role mailboxes (`abuse@`, `postmaster@`, ...) from the `haraka-webhook` role webhook and stores it for the operator to read in `/admin`. Enabled only when `WEBHOOK_SIGNING_KEY` is set. The request is `application/x-www-form-urlencoded` (Mailgun-style: `recipient`, `sender`, `from`, `subject`, `message-headers`, `timestamp`, `token`, `signature`, `body-mime`); auth is the plugin's `HMAC-SHA256(timestamp+token)` signature.
 
@@ -229,10 +229,11 @@ the event `payload` tag to equal the SHA-256 hash of the exact UTF-8 JSON body.
 A valid register or disable returns `204 No Content`.
 
 FCM delivery uses the Firebase Admin SDK and Application Default Credentials.
-UnifiedPush delivery uses encrypted Web Push (`aes128gcm`); registrations must
-include the endpoint's `p256dh` public key and `auth` secret. Push payloads contain
-notification text and an optional NIP-19 `nevent` reference with relay hints, but
-never the public email body.
+UnifiedPush delivery uses encrypted Web Push (`aes128gcm`) when registrations
+include the endpoint's `p256dh` public key and `auth` secret; otherwise the JSON
+payload is posted directly to the UnifiedPush endpoint. Push payloads contain
+localized notification text and an optional NIP-19 `nevent` reference with relay
+hints, but never the public email body.
 
 ### Plans
 

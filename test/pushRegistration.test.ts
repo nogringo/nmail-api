@@ -72,16 +72,28 @@ async function post(
   })
 }
 
-test('POST registers an FCM subscription for the signing pubkey', async () => {
+test('POST registers an FCM subscription with language for the signing pubkey', async () => {
   const { repo, app } = await buildPushApp()
 
-  const result = await post(app, { action: 'register', transport: { type: 'fcm', token: 'token-1' } })
+  const result = await post(app, { action: 'register', language: 'fr-FR', transport: { type: 'fcm', token: 'token-1' } })
 
   assert.equal(result.statusCode, 204)
   const subscription = [...repo.pushSubscriptions.values()][0]
   assert.equal(subscription.transport, 'fcm')
   assert.equal(subscription.destination, 'token-1')
+  assert.equal(subscription.language, 'fr-FR')
   assert.ok(await repo.getAccount(subscription.pubkey), 'account is created')
+
+  await app.close()
+})
+
+test('POST registers an FCM subscription with English fallback when language is omitted', async () => {
+  const { repo, app } = await buildPushApp()
+
+  const result = await post(app, { action: 'register', transport: { type: 'fcm', token: 'token-1' } })
+
+  assert.equal(result.statusCode, 204)
+  assert.equal([...repo.pushSubscriptions.values()][0].language, 'en')
 
   await app.close()
 })
@@ -91,6 +103,7 @@ test('POST registers a UnifiedPush subscription with encryption keys', async () 
 
   const result = await post(app, {
     action: 'register',
+    language: 'en',
     transport: {
       type: 'unifiedpush',
       endpoint: 'https://push.example/abc',
@@ -105,9 +118,36 @@ test('POST registers a UnifiedPush subscription with encryption keys', async () 
     pubkey: [...repo.pushSubscriptions.values()][0].pubkey,
     transport: 'unifiedpush',
     destination: 'https://push.example/abc',
+    language: 'en',
     p256dh: 'key',
     auth: 'auth-secret',
     instance: 'nmail',
+  })
+
+  await app.close()
+})
+
+test('POST registers a UnifiedPush subscription without encryption keys', async () => {
+  const { repo, app } = await buildPushApp()
+
+  const result = await post(app, {
+    action: 'register',
+    language: 'fr',
+    transport: {
+      type: 'unifiedpush',
+      endpoint: 'https://push.example/abc',
+    },
+  })
+
+  assert.equal(result.statusCode, 204)
+  assert.deepEqual([...repo.pushSubscriptions.values()][0], {
+    pubkey: [...repo.pushSubscriptions.values()][0].pubkey,
+    transport: 'unifiedpush',
+    destination: 'https://push.example/abc',
+    language: 'fr',
+    p256dh: null,
+    auth: null,
+    instance: null,
   })
 
   await app.close()
@@ -121,6 +161,7 @@ test('POST updates an existing push subscription destination', async () => {
     app,
     {
       action: 'register',
+      language: 'en',
       transport: { type: 'unifiedpush', endpoint: 'https://push.example/abc', p256dh: 'old', auth: 'old-auth' },
     },
     { sk },
@@ -131,6 +172,7 @@ test('POST updates an existing push subscription destination', async () => {
     app,
     {
       action: 'register',
+      language: 'fr',
       transport: { type: 'unifiedpush', endpoint: 'https://push.example/abc', p256dh: 'new', auth: 'new-auth', instance: 'phone' },
     },
     { sk },
@@ -142,6 +184,7 @@ test('POST updates an existing push subscription destination', async () => {
   assert.equal(subscription.p256dh, 'new')
   assert.equal(subscription.auth, 'new-auth')
   assert.equal(subscription.instance, 'phone')
+  assert.equal(subscription.language, 'fr')
 
   await app.close()
 })
@@ -149,12 +192,12 @@ test('POST updates an existing push subscription destination', async () => {
 test('POST disables a push subscription idempotently', async () => {
   const { repo, app } = await buildPushApp()
   const sk = generateSecretKey()
-  const body = { action: 'register', transport: { type: 'fcm', token: 'token-1' } }
+  const body = { action: 'register', language: 'en', transport: { type: 'fcm', token: 'token-1' } }
 
   assert.equal((await post(app, body, { sk })).statusCode, 204)
   assert.equal(repo.pushSubscriptions.size, 1)
 
-  const disable = { action: 'disable', transport: { type: 'fcm', token: 'token-1' } }
+  const disable = { action: 'disable', language: 'not read', transport: { type: 'fcm', token: 'token-1' } }
   assert.equal((await post(app, disable, { sk })).statusCode, 204)
   assert.equal((await post(app, disable, { sk })).statusCode, 204)
   assert.equal(repo.pushSubscriptions.size, 0)
@@ -172,7 +215,7 @@ test('POST disables a UnifiedPush subscription using only its endpoint', async (
     auth: 'auth-secret',
   }
 
-  assert.equal((await post(app, { action: 'register', transport }, { sk })).statusCode, 204)
+  assert.equal((await post(app, { action: 'register', language: 'en', transport }, { sk })).statusCode, 204)
   assert.equal(
     (
       await post(
@@ -190,7 +233,7 @@ test('POST disables a UnifiedPush subscription using only its endpoint', async (
 
 test('POST rejects missing or invalid NIP-98 authentication', async () => {
   const { app } = await buildPushApp()
-  const body = { action: 'register', transport: { type: 'fcm', token: 'token-1' } }
+  const body = { action: 'register', language: 'en', transport: { type: 'fcm', token: 'token-1' } }
 
   const missing = await post(app, body, { authorization: null })
   assert.equal(missing.statusCode, 401)
@@ -213,7 +256,7 @@ test('POST rejects missing or invalid NIP-98 authentication', async () => {
 
 test('POST rejects missing or mismatched NIP-98 payload hashes', async () => {
   const { app } = await buildPushApp()
-  const body = { action: 'register', transport: { type: 'fcm', token: 'token-1' } }
+  const body = { action: 'register', language: 'en', transport: { type: 'fcm', token: 'token-1' } }
 
   const missingPayload = await post(app, body, { includePayload: false })
   assert.equal(missingPayload.statusCode, 401)
@@ -231,18 +274,20 @@ test('POST rejects invalid push registration bodies', async () => {
 
   for (const body of [
     { action: 'sync', transport: { type: 'fcm', token: 'token-1' } },
-    { action: 'register', transport: { type: 'fcm', token: '' } },
-    { action: 'register', transport: { type: 'unifiedpush', endpoint: '' } },
+    { action: 'register', language: 'not a language', transport: { type: 'fcm', token: 'token-1' } },
+    { action: 'register', language: 'en', transport: { type: 'fcm', token: '' } },
+    { action: 'register', language: 'en', transport: { type: 'unifiedpush', endpoint: '' } },
     {
       action: 'register',
+      language: 'en',
       transport: { type: 'unifiedpush', endpoint: 'http://push.example/abc', p256dh: 'key', auth: 'auth-secret' },
     },
-    { action: 'register', transport: { type: 'unifiedpush', endpoint: 'https://push.example/abc' } },
     {
       action: 'register',
+      language: 'en',
       transport: { type: 'unifiedpush', endpoint: 'https://push.example/abc', p256dh: 'key' },
     },
-    { action: 'register', transport: { type: 'apns', token: 'token-1' } },
+    { action: 'register', language: 'en', transport: { type: 'apns', token: 'token-1' } },
   ]) {
     const result = await post(app, body)
     assert.equal(result.statusCode, 400)
@@ -256,7 +301,7 @@ test('POST returns 503 when push subscription storage is unavailable', async () 
   const { repo, app } = await buildPushApp()
   repo.fail = true
 
-  const result = await post(app, { action: 'register', transport: { type: 'fcm', token: 'token-1' } })
+  const result = await post(app, { action: 'register', language: 'en', transport: { type: 'fcm', token: 'token-1' } })
 
   assert.equal(result.statusCode, 503)
   assert.equal(result.json().error, 'push_registration_unavailable')

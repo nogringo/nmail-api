@@ -86,6 +86,7 @@ test('POST accepts an email notification and dispatches matching push subscripti
       pubkey: recipient,
       transport: 'fcm',
       destination: 'fcm-token',
+      language: 'en',
       p256dh: null,
       auth: null,
       instance: null,

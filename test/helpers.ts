@@ -320,6 +320,7 @@ export class MemoryIdentityRepository
       pubkey: input.pubkey,
       transport: input.transport,
       destination: input.destination,
+      language: input.language ?? 'en',
       p256dh: input.p256dh ?? null,
       auth: input.auth ?? null,
       instance: input.instance ?? null,
@@ -345,6 +346,7 @@ export class MemoryIdentityRepository
       )
       .map((subscription) => ({
         ...subscription,
+        language: subscription.language ?? 'en',
         p256dh: subscription.p256dh ?? null,
         auth: subscription.auth ?? null,
         instance: subscription.instance ?? null,
