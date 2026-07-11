@@ -11,6 +11,7 @@ import type {
 const FORBIDDEN_EMAIL_FIELDS = new Set(['rawMime', 'body', 'bodyMime', 'content', 'html', 'text'])
 const MAX_NOTIFICATION_EVENT_AGE_SECONDS = 7 * 24 * 60 * 60
 const MAX_NOTIFICATION_EVENT_FUTURE_SKEW_SECONDS = 10 * 60
+type InboundNotificationSource = 'relay' | 'webhook'
 
 const noopPushNotificationDispatcher: PushNotificationDispatcher = {
   async dispatch() {
@@ -30,6 +31,18 @@ export function createInboundNotificationHandler(
 
     const payload = parseNotificationPayload(request.body)
     if (!payload) return reply.code(400).send({ error: 'invalid_notification_payload' })
+
+    request.log.info(
+      {
+        notificationSource: notificationSourceFromPayload(request.body),
+        recipientPubkey: payload.recipientPubkey,
+        eventId: payload.event.id,
+        relayCount: payload.relays.length,
+        authenticatedPubkeyCount: payload.authenticatedPubkeys.length,
+        hasEmailMetadata: payload.email !== undefined,
+      },
+      'Inbound notification received',
+    )
 
     if (shouldSkipNotificationEvent(payload.event, Math.floor(Date.now() / 1000))) {
       return reply.code(202).send({ status: 'accepted' })
@@ -109,6 +122,11 @@ function parseNotificationPayload(value: unknown): {
 
   const parsed = { recipientPubkey, relays, event, authenticatedPubkeys }
   return email === undefined ? parsed : { ...parsed, email }
+}
+
+function notificationSourceFromPayload(value: unknown): InboundNotificationSource {
+  if (!value || typeof value !== 'object') return 'relay'
+  return Object.hasOwn(value as Record<string, unknown>, 'email') ? 'webhook' : 'relay'
 }
 
 function parseEvent(value: unknown): InboundNotificationEvent | null {
