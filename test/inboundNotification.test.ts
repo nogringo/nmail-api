@@ -266,6 +266,47 @@ test('POST accepts email metadata with a gift wrap event', async () => {
   await app.close()
 })
 
+test('POST ignores null or blank optional notification fields', async () => {
+  const repo = new MemoryIdentityRepository()
+  await repo.upsertPushSubscription({ pubkey: recipient, transport: 'fcm', destination: 'fcm-token' })
+  const deliveries: InboundNotification[] = []
+  const app = await buildApp(repo, appConfig, captureDispatcher(deliveries))
+
+  const response = await post(app, {
+    recipientPubkey: recipient,
+    relays: [null, ' ', relays[0], ''],
+    event: nostrEvent({
+      id: null,
+      pubkey: '',
+      kind: ' ',
+      tags: null,
+      content: '',
+      sig: null,
+    }),
+    authenticatedPubkeys: [null, '', relayPubkey],
+    email: {
+      from: { address: 'alice@example.net', name: null },
+      subject: ' ',
+      preview: null,
+      rawMime: null,
+    },
+  })
+
+  assert.equal(response.statusCode, 202)
+  assert.equal(deliveries.length, 1)
+  assert.deepEqual(deliveries[0].relays, relays)
+  assert.deepEqual(deliveries[0].authenticatedPubkeys, [relayPubkey])
+  assert.deepEqual(deliveries[0].event, {
+    created_at: deliveries[0].event.created_at,
+    tags: [],
+  })
+  assert.deepEqual(deliveries[0].email, {
+    from: { address: 'alice@example.net' },
+  })
+
+  await app.close()
+})
+
 test('POST ignores gift wrap content and sig when callers include them', async () => {
   const repo = new MemoryIdentityRepository()
   await repo.upsertPushSubscription({ pubkey: recipient, transport: 'fcm', destination: 'fcm-token' })

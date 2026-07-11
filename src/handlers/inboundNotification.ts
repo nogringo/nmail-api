@@ -119,23 +119,23 @@ function parseEvent(value: unknown): InboundNotificationEvent | null {
   if (!tags) return null
 
   const id = optionalHex64(event.id)
-  if (event.id !== undefined && !id) return null
+  if (!isIgnorableField(event.id) && !id) return null
 
   const pubkey = optionalHex64(event.pubkey)
-  if (event.pubkey !== undefined && !pubkey) return null
+  if (!isIgnorableField(event.pubkey) && !pubkey) return null
 
   const createdAt = optionalSafeInteger(event.created_at)
   if (createdAt === undefined) return null
 
   const kind = optionalSafeInteger(event.kind)
-  if (event.kind !== undefined && kind === undefined) return null
+  if (!isIgnorableField(event.kind) && kind === undefined) return null
 
   const isGiftWrap = kind === 1059
   const content = parseOptionalString(event.content)
-  if (!isGiftWrap && event.content !== undefined && content === undefined) return null
+  if (!isGiftWrap && content === null) return null
 
   const sig = optionalHex(event.sig, 128)
-  if (!isGiftWrap && event.sig !== undefined && !sig) return null
+  if (!isGiftWrap && !isIgnorableField(event.sig) && !sig) return null
 
   return {
     tags,
@@ -143,7 +143,7 @@ function parseEvent(value: unknown): InboundNotificationEvent | null {
     ...(id ? { id } : {}),
     ...(pubkey ? { pubkey } : {}),
     ...(kind !== undefined ? { kind } : {}),
-    ...(!isGiftWrap && content !== undefined ? { content } : {}),
+    ...(!isGiftWrap && typeof content === 'string' ? { content } : {}),
     ...(!isGiftWrap && sig ? { sig } : {}),
   }
 }
@@ -153,10 +153,10 @@ function parseRelays(value: unknown): string[] | null {
 
   const relays = new Set<string>()
   for (const entry of value) {
+    if (isIgnorableField(entry)) continue
     if (typeof entry !== 'string') return null
 
     const relay = entry.trim()
-    if (!relay) return null
 
     try {
       const url = new URL(relay)
@@ -179,7 +179,7 @@ function shouldSkipNotificationEvent(event: InboundNotificationEvent, nowSeconds
 }
 
 function parseTags(value: unknown): string[][] | null {
-  if (value === undefined) return []
+  if (isIgnorableField(value)) return []
   if (!Array.isArray(value)) return null
 
   const tags: string[][] = []
@@ -192,47 +192,50 @@ function parseTags(value: unknown): string[][] | null {
 }
 
 function parseEmailMetadata(value: unknown): InboundNotificationEmailMetadata | undefined | null {
-  if (value === undefined) return undefined
+  if (isIgnorableField(value)) return undefined
   if (!value || typeof value !== 'object') return null
 
   const email = value as Record<string, unknown>
   if (hasForbiddenEmailBody(email)) return null
 
   const from = parseFrom(email.from)
-  if (email.from !== undefined && !from) return null
+  if (from === null) return null
 
   const subject = optionalNonEmptyString(email.subject)
-  if (email.subject !== undefined && subject === undefined) return null
+  if (!isIgnorableField(email.subject) && subject === undefined) return null
 
   const preview = optionalNonEmptyString(email.preview)
-  if (email.preview !== undefined && preview === undefined) return null
+  if (!isIgnorableField(email.preview) && preview === undefined) return null
 
-  return {
+  const parsed = {
     ...(from ? { from } : {}),
     ...(subject !== undefined ? { subject } : {}),
     ...(preview !== undefined ? { preview } : {}),
   }
+  return Object.keys(parsed).length === 0 ? undefined : parsed
 }
 
-function parseFrom(value: unknown): InboundNotificationEmailMetadata['from'] | null {
+function parseFrom(value: unknown): InboundNotificationEmailMetadata['from'] | undefined | null {
+  if (isIgnorableField(value)) return undefined
   if (!value || typeof value !== 'object') return null
 
   const from = value as Record<string, unknown>
   const address = optionalNonEmptyString(from.address)
-  if (!address) return null
+  if (!address) return Object.values(from).every(isIgnorableField) ? undefined : null
 
   const name = optionalNonEmptyString(from.name)
-  if (from.name !== undefined && name === undefined) return null
+  if (!isIgnorableField(from.name) && name === undefined) return null
 
   return name === undefined ? { address } : { address, name }
 }
 
 function parsePubkeyArray(value: unknown): string[] | null {
-  if (value === undefined) return []
+  if (isIgnorableField(value)) return []
   if (!Array.isArray(value)) return null
 
   const pubkeys = new Set<string>()
   for (const entry of value) {
+    if (isIgnorableField(entry)) continue
     const pubkey = optionalHex64(entry)
     if (!pubkey) return null
     pubkeys.add(pubkey)
@@ -242,7 +245,7 @@ function parsePubkeyArray(value: unknown): string[] | null {
 }
 
 function hasForbiddenEmailBody(value: Record<string, unknown>): boolean {
-  return Object.keys(value).some((key) => FORBIDDEN_EMAIL_FIELDS.has(key))
+  return Object.entries(value).some(([key, entry]) => FORBIDDEN_EMAIL_FIELDS.has(key) && !isIgnorableField(entry))
 }
 
 function optionalHex64(value: unknown): string | undefined {
@@ -267,8 +270,13 @@ function optionalNonEmptyString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined
 }
 
-function parseOptionalString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined
+function parseOptionalString(value: unknown): string | undefined | null {
+  if (isIgnorableField(value)) return undefined
+  return typeof value === 'string' ? value : null
+}
+
+function isIgnorableField(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
 }
 
 function firstHeaderValue(value: string | string[] | undefined): string {
