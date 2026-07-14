@@ -11,6 +11,7 @@ export interface AppConfig {
   adminPassword?: string
   roleWebhookSigningKey?: string
   roleWebhookMaxBodyBytes: number
+  accountDeletionRelayUrls: string[]
 }
 
 export type IdentityVisibility = 'public' | 'private'
@@ -81,6 +82,7 @@ export interface AccountRepository {
   listAccounts?(search?: string): Promise<Account[]>
   upsertAccount?(pubkey: string, input: AccountInput): Promise<Account>
   deleteAccount?(pubkey: string): Promise<boolean>
+  deleteAccountData(pubkey: string): Promise<void>
 }
 
 export interface PlanLimits {

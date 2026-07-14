@@ -1,4 +1,5 @@
 import type { AppConfig } from './types.js'
+import { normalizeRelayUrl } from './nostr.js'
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const databaseUrl = env.DATABASE_URL
@@ -20,6 +21,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     adminPassword: parseOptionalSecret(env.ADMIN_PASSWORD),
     roleWebhookSigningKey: parseOptionalSecret(env.WEBHOOK_SIGNING_KEY),
     roleWebhookMaxBodyBytes: parseMaxBodyBytes(env.ROLE_WEBHOOK_MAX_BODY_BYTES, 'ROLE_WEBHOOK_MAX_BODY_BYTES'),
+    accountDeletionRelayUrls: parseRelayUrls(env.ACCOUNT_DELETION_RELAY_URLS),
   }
 }
 
@@ -83,4 +85,21 @@ function parseRequiredSecret(value: string | undefined, name: string): string {
 function parseOptionalSecret(value: string | undefined): string | undefined {
   const secret = value?.trim()
   return secret || undefined
+}
+
+function parseRelayUrls(value: string | undefined): string[] {
+  const entries = value
+    ?.split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+
+  if (!entries?.length) return []
+
+  return entries.map((entry) => {
+    const relayUrl = normalizeRelayUrl(entry)
+    if (!relayUrl) {
+      throw new Error('ACCOUNT_DELETION_RELAY_URLS must contain comma-separated ws:// or wss:// URLs')
+    }
+    return relayUrl
+  })
 }

@@ -1,6 +1,7 @@
 import cors from '@fastify/cors'
 import formbody from '@fastify/formbody'
 import Fastify from 'fastify'
+import { createAccountVanishHandler } from './handlers/accountVanish.js'
 import { registerAdminRoutes } from './handlers/admin.js'
 import { registerAliasRoutes } from './handlers/aliases.js'
 import { createInboundDecisionHandler } from './handlers/inboundDecision.js'
@@ -30,6 +31,7 @@ export async function buildApp(
     RoleMessageRepository &
     InboundNotificationRepository,
   config: Pick<AppConfig, 'inboundDecisionToken' | 'outboundDecisionToken' | 'adminPassword' | 'roleWebhookSigningKey'> & {
+    accountDeletionRelayUrls?: string[]
     inboundNotificationToken?: string
     outboundMaxBodyBytes?: number
     roleWebhookMaxBodyBytes?: number
@@ -62,6 +64,7 @@ export async function buildApp(
   app.get('/.well-known/nostr.json', createNip05Handler(repo))
   app.post('/inbound/decision', createInboundDecisionHandler(repo, config))
   app.post('/inbound/notifications', createInboundNotificationHandler(repo, config, pushNotificationDispatcher))
+  app.post('/accounts/vanish', createAccountVanishHandler(repo, { accountDeletionRelayUrls: config.accountDeletionRelayUrls ?? [] }))
   app.post('/push/subscriptions', createPushRegistrationHandler(repo))
   registerAliasRoutes(app, repo)
   if (config.outboundDecisionToken) {
