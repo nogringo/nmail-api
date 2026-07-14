@@ -7,6 +7,7 @@ TypeScript API for identity resolution and inbound mail policy:
 - `POST /outbound/decision` answers the outbound (nostr → SMTP) decision protocol, enabled only when `OUTBOUND_DECISION_TOKEN` is set.
 - `PUT/GET/DELETE /aliases[/{name}]` is the REST alias lifecycle (claim, list, release) authenticated with [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) (`Authorization: Nostr <base64 kind-27235 event>`); the signing pubkey owns the aliases it claims, served on the alias domain (request Host). Enforces the per-plan `max_aliases` limit (free 2, premium 10). See [docs/AliasProtocol.md](docs/AliasProtocol.md) and [docs/AccountModel.md](docs/AccountModel.md).
 - `POST /push/subscriptions` registers or disables app push destinations (FCM or UnifiedPush), authenticated with NIP-98 and its `payload` tag bound to the exact JSON body bytes. Registration may include a BCP 47 `language` used for notification text; when omitted, English is used.
+- `POST /accounts/vanish` deletes account data for a valid NIP-62 request-to-vanish event. See [docs/AccountDeletionProtocol.md](docs/AccountDeletionProtocol.md).
 - `POST /inbound/notifications` is the internal notification event route for trusted SMTP/relay services to trigger push delivery. See [docs/InboundNotificationProtocol.md](docs/InboundNotificationProtocol.md).
 - `POST /inbound/role` receives mail addressed to reserved role mailboxes (`abuse@`, `postmaster@`, ...) from the `haraka-webhook` role webhook and stores it for the operator to read in `/admin`. Enabled only when `WEBHOOK_SIGNING_KEY` is set. The request is `application/x-www-form-urlencoded` (Mailgun-style: `recipient`, `sender`, `from`, `subject`, `message-headers`, `timestamp`, `token`, `signature`, `body-mime`); auth is the plugin's `HMAC-SHA256(timestamp+token)` signature.
 
@@ -23,6 +24,7 @@ Environment variables:
 - `INBOUND_DECISION_TOKEN`: shared secret required by `POST /inbound/decision`.
 - `INBOUND_NOTIFICATION_TOKEN`: shared secret required by
   `POST /inbound/notifications`.
+- `ACCOUNT_DELETION_RELAY_URLS`: comma-separated `ws://` or `wss://` relay URLs accepted by `POST /accounts/vanish`.
 - `GOOGLE_APPLICATION_CREDENTIALS`: path to the Firebase service-account JSON
   used for FCM delivery. The project ID is read from this file.
 - `WEB_PUSH_VAPID_SUBJECT`, `WEB_PUSH_VAPID_PUBLIC_KEY`,

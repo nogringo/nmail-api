@@ -193,6 +193,26 @@ export class MemoryIdentityRepository
     return this.accounts.delete(pubkey)
   }
 
+  async deleteAccountData(pubkey: string): Promise<void> {
+    for (const [identityKey, identity] of this.identities) {
+      if (identity.pubkey === pubkey) this.identities.delete(identityKey)
+    }
+
+    for (const key of [...this.pushSubscriptions.keys()]) {
+      if (key.startsWith(`${pubkey}:`)) this.pushSubscriptions.delete(key)
+    }
+
+    for (let index = this.sends.length - 1; index >= 0; index -= 1) {
+      if (this.sends[index].pubkey === pubkey) this.sends.splice(index, 1)
+    }
+
+    for (const key of [...this.inboundNotificationDeliveries]) {
+      if (key.startsWith(`${pubkey}:`)) this.inboundNotificationDeliveries.delete(key)
+    }
+
+    this.accounts.delete(pubkey)
+  }
+
   async getPlan(name: string | null): Promise<Plan> {
     if (this.fail) throw new Error('database unavailable')
 

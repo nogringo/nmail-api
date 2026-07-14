@@ -20,6 +20,28 @@ test('loadConfig includes the inbound decision token', () => {
   assert.equal(config.inboundNotificationToken, 'notify-token')
 })
 
+test('loadConfig parses account deletion relay URLs', () => {
+  const config = loadConfig({
+    DATABASE_URL: 'postgres://localhost/nmail',
+    INBOUND_DECISION_TOKEN: 'secret-token',
+    ACCOUNT_DELETION_RELAY_URLS: 'wss://Relay.Example.com/, ws://localhost:7777/path/',
+  })
+
+  assert.deepEqual(config.accountDeletionRelayUrls, ['wss://relay.example.com', 'ws://localhost:7777/path'])
+})
+
+test('loadConfig rejects invalid account deletion relay URLs', () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        DATABASE_URL: 'postgres://localhost/nmail',
+        INBOUND_DECISION_TOKEN: 'secret-token',
+        ACCOUNT_DELETION_RELAY_URLS: 'https://relay.example.com',
+      }),
+    /ACCOUNT_DELETION_RELAY_URLS/,
+  )
+})
+
 test('loadConfig enables admin only when ADMIN_PASSWORD is set', () => {
   const withoutAdmin = loadConfig({
     DATABASE_URL: 'postgres://localhost/nmail',

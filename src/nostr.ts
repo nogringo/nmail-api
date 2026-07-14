@@ -36,6 +36,18 @@ export function findTagValue(tags: string[][], name: string): string | undefined
   return undefined
 }
 
+export function normalizeRelayUrl(value: string): string | null {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return null
+
+    const pathname = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '')
+    return `${url.protocol}//${url.host.toLowerCase()}${pathname}${url.search}`
+  } catch {
+    return null
+  }
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
 }

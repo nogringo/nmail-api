@@ -334,6 +334,24 @@ export class PgIdentityRepository
     return (result.rowCount ?? 0) > 0
   }
 
+  async deleteAccountData(pubkey: string): Promise<void> {
+    const client = await this.pool.connect()
+    try {
+      await client.query('begin')
+      await client.query('delete from inbound_notification_deliveries where recipient_pubkey = $1', [pubkey])
+      await client.query('delete from outbound_sends where pubkey = $1', [pubkey])
+      await client.query('delete from push_subscriptions where pubkey = $1', [pubkey])
+      await client.query('delete from identities where pubkey = $1', [pubkey])
+      await client.query('delete from accounts where pubkey = $1', [pubkey])
+      await client.query('commit')
+    } catch (error) {
+      await client.query('rollback')
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
   async getPlan(name: string | null): Promise<Plan> {
     if (name) {
       const named = await this.pool.query<PlanRow>(
