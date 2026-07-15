@@ -48,6 +48,10 @@ export function createInboundNotificationHandler(
       return reply.code(202).send({ status: 'accepted' })
     }
 
+    if (shouldSkipSelfDepositedNotification(payload.recipientPubkey, payload.authenticatedPubkeys)) {
+      return reply.code(202).send({ status: 'accepted' })
+    }
+
     let claimedDelivery: { recipientPubkey: string; eventId: string } | null = null
 
     try {
@@ -194,6 +198,10 @@ function shouldSkipNotificationEvent(event: InboundNotificationEvent, nowSeconds
     event.created_at < nowSeconds - MAX_NOTIFICATION_EVENT_AGE_SECONDS ||
     event.created_at > nowSeconds + MAX_NOTIFICATION_EVENT_FUTURE_SKEW_SECONDS
   )
+}
+
+function shouldSkipSelfDepositedNotification(recipientPubkey: string, authenticatedPubkeys: string[]): boolean {
+  return authenticatedPubkeys.includes(recipientPubkey)
 }
 
 function parseTags(value: unknown): string[][] | null {

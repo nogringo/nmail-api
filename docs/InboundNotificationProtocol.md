@@ -57,5 +57,7 @@ Sent by `nostr-relay`.
 
 `authenticatedPubkeys` is used for notification policy/anti-spam and may be
 shown as "deposited by" context. It does not identify the decrypted sender.
+When `recipientPubkey` is also present in `authenticatedPubkeys`, the API treats
+the event as self-deposited and accepts it without sending push notifications.
 
 Success: `202 { "status": "accepted" }`.

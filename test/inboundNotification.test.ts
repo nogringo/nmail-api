@@ -203,6 +203,31 @@ test('POST skips stale or future notification events without claiming delivery',
   await app.close()
 })
 
+test('POST skips self-deposited gift wrap notifications without claiming delivery', async () => {
+  const repo = new MemoryIdentityRepository()
+  await repo.upsertPushSubscription({ pubkey: recipient, transport: 'fcm', destination: 'fcm-token' })
+  const deliveries: InboundNotification[] = []
+  const app = await buildApp(repo, appConfig, captureDispatcher(deliveries))
+
+  const response = await post(app, {
+    recipientPubkey: recipient,
+    relays,
+    event: nostrEvent({
+      id: 'a'.repeat(64),
+      kind: 1059,
+      tags: [['p', recipient]],
+    }),
+    authenticatedPubkeys: [relayPubkey, recipient.toUpperCase()],
+  })
+
+  assert.equal(response.statusCode, 202)
+  assert.deepEqual(response.json(), { status: 'accepted' })
+  assert.equal(deliveries.length, 0)
+  assert.equal(repo.inboundNotificationDeliveries.size, 0)
+
+  await app.close()
+})
+
 test('POST accepts a generic gift wrap notification with authenticated pubkeys', async () => {
   const repo = new MemoryIdentityRepository()
   await repo.upsertPushSubscription({
