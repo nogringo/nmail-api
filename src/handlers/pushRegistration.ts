@@ -8,6 +8,7 @@ type PushRegistrationAction = 'register' | 'disable'
 interface PushRegistrationPayload {
   action: PushRegistrationAction
   language?: string
+  pubkey?: string
   transport: PushTransport
 }
 
@@ -21,34 +22,38 @@ interface RawBodyRequest extends FastifyRequest {
 
 export function createPushRegistrationHandler(repo: PushSubscriptionRepository) {
   return async function pushRegistrationHandler(request: RawBodyRequest, reply: FastifyReply) {
-    if (!isJsonRequest(request)) return reply.code(400).send({ error: 'invalid_push_registration' })
-
-    const payloadHash = request.rawBody ? sha256Hex(request.rawBody) : null
-    if (!payloadHash) return reply.code(400).send({ error: 'invalid_push_registration' })
-
-    const auth = verifyNip98({
-      authorization: request.headers.authorization,
-      method: request.method,
-      host: request.headers.host ?? '',
-      path: request.url,
-      nowSeconds: Math.floor(Date.now() / 1000),
-      payloadHash,
-    })
-
-    if (!auth.ok) {
-      return reply.header('www-authenticate', 'Nostr').code(401).send({ error: auth.reason })
+    if (!isJsonRequest(request) || !request.rawBody) {
+      return reply.code(400).send({ error: 'invalid_push_registration' })
     }
 
     const payload = parsePushRegistrationPayload(request.body)
     if (!payload) return reply.code(400).send({ error: 'invalid_push_registration' })
 
-    const subscription = toSubscriptionInput(auth.pubkey, payload)
+    // `disable` needs no credential: the push destination is the only secret it
+    // carries, so a subscription can be dropped once its key is gone.
+    let pubkey: string | null = null
+    if (payload.action === 'register') {
+      const auth = verifyNip98({
+        authorization: request.headers.authorization,
+        method: request.method,
+        host: request.headers.host ?? '',
+        path: request.url,
+        nowSeconds: Math.floor(Date.now() / 1000),
+        payloadHash: sha256Hex(request.rawBody),
+      })
+
+      if (!auth.ok) {
+        return reply.header('www-authenticate', 'Nostr').code(401).send({ error: auth.reason })
+      }
+
+      pubkey = auth.pubkey
+    }
 
     try {
-      if (payload.action === 'register') {
-        await repo.upsertPushSubscription(subscription)
+      if (pubkey) {
+        await repo.upsertPushSubscription(toSubscriptionInput(pubkey, payload))
       } else {
-        await repo.deletePushSubscription(subscription.pubkey, subscription.transport, subscription.destination)
+        await repo.deletePushSubscriptions(payload.transport.type, destinationOf(payload.transport), payload.pubkey)
       }
 
       return reply.code(204).send()
@@ -62,11 +67,16 @@ export function createPushRegistrationHandler(repo: PushSubscriptionRepository) 
 function parsePushRegistrationPayload(value: unknown): PushRegistrationPayload | null {
   if (!value || typeof value !== 'object') return null
 
-  const payload = value as { action?: unknown; language?: unknown; transport?: unknown }
+  const payload = value as { action?: unknown; language?: unknown; pubkey?: unknown; transport?: unknown }
   if (payload.action !== 'register' && payload.action !== 'disable') return null
 
   const language = payload.action === 'register' ? parseOptionalLanguage(payload.language) : undefined
   if (payload.action === 'register' && payload.language !== undefined && !language) return null
+
+  // Only narrows a disable, so it is never a credential: the destination bounds
+  // the deletion on its own. The register account is the NIP-98 signer.
+  const pubkey = payload.action === 'disable' ? parseOptionalPubkey(payload.pubkey) : undefined
+  if (payload.action === 'disable' && payload.pubkey !== undefined && !pubkey) return null
 
   const transport = parseTransport(payload.transport, payload.action === 'register')
   if (!transport) return null
@@ -74,8 +84,16 @@ function parsePushRegistrationPayload(value: unknown): PushRegistrationPayload |
   return {
     action: payload.action,
     ...(language ? { language } : {}),
+    ...(pubkey ? { pubkey } : {}),
     transport,
   }
+}
+
+function parseOptionalPubkey(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined
+
+  const pubkey = nonEmptyString(value)?.toLowerCase()
+  return pubkey && /^[0-9a-f]{64}$/.test(pubkey) ? pubkey : undefined
 }
 
 function parseTransport(value: unknown, isRegister: boolean): PushTransport | null {
@@ -117,22 +135,23 @@ function validWebPushEndpoint(value: unknown): string | null {
   }
 }
 
+function destinationOf(transport: PushTransport): string {
+  return transport.type === 'fcm' ? transport.token : transport.endpoint
+}
+
 function toSubscriptionInput(pubkey: string, payload: PushRegistrationPayload): PushSubscriptionInput {
   const { transport } = payload
-  if (transport.type === 'fcm') {
-    return {
-      pubkey,
-      transport: transport.type,
-      destination: transport.token,
-      ...(payload.language ? { language: payload.language } : {}),
-    }
-  }
-
-  return {
+  const base = {
     pubkey,
     transport: transport.type,
-    destination: transport.endpoint,
+    destination: destinationOf(transport),
     ...(payload.language ? { language: payload.language } : {}),
+  }
+
+  if (transport.type === 'fcm') return base
+
+  return {
+    ...base,
     p256dh: transport.p256dh ?? null,
     auth: transport.auth ?? null,
     instance: transport.instance ?? null,

@@ -6,7 +6,7 @@ TypeScript API for identity resolution and inbound mail policy:
 - `POST /inbound/decision` answers the inbound SMTP decision protocol.
 - `POST /outbound/decision` answers the outbound (nostr → SMTP) decision protocol, enabled only when `OUTBOUND_DECISION_TOKEN` is set.
 - `PUT/GET/DELETE /aliases[/{name}]` is the REST alias lifecycle (claim, list, release) authenticated with [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) (`Authorization: Nostr <base64 kind-27235 event>`); the signing pubkey owns the aliases it claims, served on the alias domain (request Host). Enforces the per-plan `max_aliases` limit (free 2, premium 10). See [docs/AliasProtocol.md](docs/AliasProtocol.md) and [docs/AccountModel.md](docs/AccountModel.md).
-- `POST /push/subscriptions` registers or disables app push destinations (FCM or UnifiedPush), authenticated with NIP-98 and its `payload` tag bound to the exact JSON body bytes. Registration may include a BCP 47 `language` used for notification text; when omitted, English is used.
+- `POST /push/subscriptions` registers or disables app push destinations (FCM or UnifiedPush). Registering is authenticated with NIP-98 and its `payload` tag bound to the exact JSON body bytes, and may include a BCP 47 `language` used for notification text; when omitted, English is used. Disabling is unauthenticated, since a client has to be able to unsubscribe an account whose key it no longer holds.
 - `POST /accounts/vanish` deletes account data for a valid NIP-62 request-to-vanish event. See [docs/AccountDeletionProtocol.md](docs/AccountDeletionProtocol.md).
 - `POST /inbound/notifications` is the internal notification event route for trusted SMTP/relay services to trigger push delivery. See [docs/InboundNotificationProtocol.md](docs/InboundNotificationProtocol.md).
 - `POST /inbound/role` receives mail addressed to reserved role mailboxes (`abuse@`, `postmaster@`, ...) from the `haraka-webhook` role webhook and stores it for the operator to read in `/admin`. Enabled only when `WEBHOOK_SIGNING_KEY` is set. The request is `application/x-www-form-urlencoded` (Mailgun-style: `recipient`, `sender`, `from`, `subject`, `message-headers`, `timestamp`, `token`, `signature`, `body-mime`); auth is the plugin's `HMAC-SHA256(timestamp+token)` signature.
@@ -225,10 +225,20 @@ NMAIL_PUSH_ENDPOINT=https://api.example.com/push/subscriptions
 ```
 
 The app posts `application/json` with `action: "register"` or `"disable"` and a
-transport destination (`fcm.token` or `unifiedpush.endpoint`). Authentication is
-NIP-98 (`Authorization: Nostr <base64 kind-27235 event>`) and this route requires
-the event `payload` tag to equal the SHA-256 hash of the exact UTF-8 JSON body.
-A valid register or disable returns `204 No Content`.
+transport destination (`fcm.token` or `unifiedpush.endpoint`). Both return
+`204 No Content`.
+
+`register` is authenticated with NIP-98 (`Authorization: Nostr <base64 kind-27235
+event>`), and this route requires the event `payload` tag to equal the SHA-256
+hash of the exact UTF-8 JSON body. The subscription belongs to the signing
+pubkey; several accounts of one device may register the same destination.
+
+`disable` carries no `Authorization` header, and one sent anyway is ignored: it
+lets a client unsubscribe an account it has logged out of or removed, whose key
+it can no longer sign with. It deletes by transport and destination, narrowed to
+an optional `pubkey` body field, and answers `204` whether or not a subscription
+matched. The destination is therefore the only credential involved: keep it out
+of logs, and note that there is no rate limit on this route today.
 
 FCM delivery uses the Firebase Admin SDK and Application Default Credentials.
 UnifiedPush delivery uses encrypted Web Push (`aes128gcm`) when registrations

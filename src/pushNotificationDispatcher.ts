@@ -285,7 +285,9 @@ function notificationCopy(language: string): NotificationCopy {
 }
 
 async function removeSubscription(repo: PushSubscriptionRepository, subscription: PushSubscription): Promise<void> {
-  await repo.deletePushSubscription(subscription.pubkey, subscription.transport, subscription.destination)
+  // A dead destination is dead for every account sharing it, not only the one
+  // whose delivery failed: several accounts of a device register the same token.
+  await repo.deletePushSubscriptions(subscription.transport, subscription.destination)
 }
 
 function isPermanentDeliveryError(transport: PushSubscription['transport'], error: unknown): boolean {

@@ -582,12 +582,18 @@ export class PgIdentityRepository
     }
   }
 
-  async deletePushSubscription(pubkey: string, transport: PushTransportType, destination: string): Promise<boolean> {
-    const result = await this.pool.query(
-      'delete from push_subscriptions where pubkey = $1 and transport = $2 and destination = $3',
-      [pubkey, transport, destination],
-    )
-    return (result.rowCount ?? 0) > 0
+  async deletePushSubscriptions(transport: PushTransportType, destination: string, pubkey?: string): Promise<number> {
+    const result = pubkey
+      ? await this.pool.query(
+          'delete from push_subscriptions where pubkey = $1 and transport = $2 and destination = $3',
+          [pubkey, transport, destination],
+        )
+      : await this.pool.query('delete from push_subscriptions where transport = $1 and destination = $2', [
+          transport,
+          destination,
+        ])
+
+    return result.rowCount ?? 0
   }
 
   async listPushSubscriptions(pubkeys: string[]): Promise<PushSubscription[]> {

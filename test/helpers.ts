@@ -347,10 +347,19 @@ export class MemoryIdentityRepository
     })
   }
 
-  async deletePushSubscription(pubkey: string, transport: PushTransportType, destination: string): Promise<boolean> {
+  async deletePushSubscriptions(transport: PushTransportType, destination: string, pubkey?: string): Promise<number> {
     if (this.fail) throw new Error('database unavailable')
 
-    return this.pushSubscriptions.delete(pushKey(pubkey, transport, destination))
+    if (pubkey) return this.pushSubscriptions.delete(pushKey(pubkey, transport, destination)) ? 1 : 0
+
+    let deleted = 0
+    for (const [key, subscription] of this.pushSubscriptions) {
+      if (subscription.transport !== transport || subscription.destination !== destination) continue
+      this.pushSubscriptions.delete(key)
+      deleted += 1
+    }
+
+    return deleted
   }
 
   async listPushSubscriptions(pubkeys: string[]): Promise<PushSubscription[]> {

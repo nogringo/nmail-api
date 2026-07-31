@@ -309,6 +309,119 @@ test('POST returns 503 when push subscription storage is unavailable', async () 
   await app.close()
 })
 
+test('POST disables without authentication, restricted to the given pubkey', async () => {
+  const { repo, app } = await buildPushApp()
+  const first = generateSecretKey()
+  const second = generateSecretKey()
+  const transport = { type: 'fcm', token: 'shared-token' }
+
+  for (const sk of [first, second]) {
+    assert.equal((await post(app, { action: 'register', language: 'en', transport }, { sk })).statusCode, 204)
+  }
+  assert.equal(repo.pushSubscriptions.size, 2)
+
+  const disable = { action: 'disable', pubkey: getPublicKey(first), transport }
+  assert.equal((await post(app, disable, { authorization: null })).statusCode, 204)
+
+  assert.deepEqual(
+    [...repo.pushSubscriptions.values()].map((subscription) => subscription.pubkey),
+    [getPublicKey(second)],
+  )
+
+  await app.close()
+})
+
+test('POST disables every subscription on a destination when no pubkey is given', async () => {
+  const { repo, app } = await buildPushApp()
+  const transport = { type: 'fcm', token: 'shared-token' }
+
+  for (const sk of [generateSecretKey(), generateSecretKey()]) {
+    assert.equal((await post(app, { action: 'register', language: 'en', transport }, { sk })).statusCode, 204)
+  }
+  assert.equal(repo.pushSubscriptions.size, 2)
+
+  assert.equal((await post(app, { action: 'disable', transport }, { authorization: null })).statusCode, 204)
+  assert.equal(repo.pushSubscriptions.size, 0)
+
+  await app.close()
+})
+
+test('POST answers 204 for a disable that matches nothing, whatever its authorization', async () => {
+  const { app } = await buildPushApp()
+  const transport = { type: 'fcm', token: 'unknown-token' }
+
+  for (const authorization of [null, 'Nostr not-an-event', authToken().token]) {
+    const result = await post(app, { action: 'disable', transport }, { authorization })
+    assert.equal(result.statusCode, 204)
+  }
+
+  await app.close()
+})
+
+test('POST ignores the authorization header of a disable', async () => {
+  const { repo, app } = await buildPushApp()
+  const sk = generateSecretKey()
+  const transport = { type: 'fcm', token: 'token-1' }
+
+  assert.equal((await post(app, { action: 'register', language: 'en', transport }, { sk })).statusCode, 204)
+
+  // A stale NIP-98 event signed by another key would fail verification, yet the
+  // legacy client that sends one still has to be able to unsubscribe.
+  const stale = authToken({ sk: generateSecretKey(), payloadHash: sha256Hex('other body') }).token
+  assert.equal((await post(app, { action: 'disable', transport }, { authorization: stale })).statusCode, 204)
+  assert.equal(repo.pushSubscriptions.size, 0)
+
+  await app.close()
+})
+
+test('POST rejects a disable carrying an invalid pubkey', async () => {
+  const { app } = await buildPushApp()
+  const transport = { type: 'fcm', token: 'token-1' }
+
+  for (const pubkey of ['', 'abc', 'z'.repeat(64), 'a'.repeat(63), 'a'.repeat(65), 42]) {
+    const result = await post(app, { action: 'disable', pubkey, transport }, { authorization: null })
+    assert.equal(result.statusCode, 400)
+    assert.equal(result.json().error, 'invalid_push_registration')
+  }
+
+  const missingTransport = await post(app, { action: 'disable', pubkey: 'a'.repeat(64) }, { authorization: null })
+  assert.equal(missingTransport.statusCode, 400)
+
+  await app.close()
+})
+
+test('POST registers under the signing pubkey, never the one in the body', async () => {
+  const { repo, app } = await buildPushApp()
+  const sk = generateSecretKey()
+  const body = {
+    action: 'register',
+    language: 'en',
+    pubkey: 'b'.repeat(64),
+    transport: { type: 'fcm', token: 'token-1' },
+  }
+
+  assert.equal((await post(app, body, { sk })).statusCode, 204)
+  assert.deepEqual(
+    [...repo.pushSubscriptions.values()].map((subscription) => subscription.pubkey),
+    [getPublicKey(sk)],
+  )
+
+  await app.close()
+})
+
+test('POST still requires NIP-98 to register', async () => {
+  const { repo, app } = await buildPushApp()
+  const body = { action: 'register', language: 'en', transport: { type: 'fcm', token: 'token-1' } }
+
+  const result = await post(app, body, { authorization: null })
+
+  assert.equal(result.statusCode, 401)
+  assert.equal(result.json().error, 'missing_auth')
+  assert.equal(repo.pushSubscriptions.size, 0)
+
+  await app.close()
+})
+
 function sha256Hex(value: string): string {
   return createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 }

@@ -219,7 +219,7 @@ export interface PushSubscription {
 
 export interface PushSubscriptionRepository {
   upsertPushSubscription(input: PushSubscriptionInput): Promise<void>
-  deletePushSubscription(pubkey: string, transport: PushTransportType, destination: string): Promise<boolean>
+  deletePushSubscriptions(transport: PushTransportType, destination: string, pubkey?: string): Promise<number>
   listPushSubscriptions(pubkeys: string[]): Promise<PushSubscription[]>
 }
 

@@ -181,6 +181,25 @@ test('dispatcher removes permanently invalid FCM and UnifiedPush subscriptions',
   assert.equal(repo.pushSubscriptions.size, 0)
 })
 
+test('dispatcher removes a dead destination for every account sharing it', async () => {
+  const repo = new MemoryIdentityRepository()
+  const fcm = fcmSubscription()
+  const roommate = { ...fcm, pubkey: 'e'.repeat(64) }
+  await repo.upsertPushSubscription(fcm)
+  await repo.upsertPushSubscription(roommate)
+
+  const dispatcher = createPushNotificationDispatcher(repo, {}, {
+    async sendFcm() {
+      throw Object.assign(new Error('unregistered'), { code: 'messaging/registration-token-not-registered' })
+    },
+    async sendWebPush() {},
+  })
+
+  await dispatcher.dispatch(notification([fcm]))
+
+  assert.equal(repo.pushSubscriptions.size, 0)
+})
+
 test('dispatcher delivers UnifiedPush payloads without encryption keys', async () => {
   const repo = new MemoryIdentityRepository()
   const subscription = { ...unifiedPushSubscription(), p256dh: null, auth: null }
