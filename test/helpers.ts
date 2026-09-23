@@ -83,11 +83,11 @@ export class MemoryIdentityRepository
     return [...this.identities.values()].filter((identity) => identity.pubkey === pubkey)
   }
 
-  async findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
+  async findNip05Identity(domain: string, localPart: string, includePrivate: boolean): Promise<UserIdentity | null> {
     if (this.fail) throw new Error('database unavailable')
 
     const identity = this.identities.get(key(domain, localPart))
-    if (!identity || identity.visibility !== 'public') return null
+    if (!identity || (identity.visibility !== 'public' && !includePrivate)) return null
 
     const account = this.accounts.get(identity.pubkey)
     return !account || account.active ? identity : null

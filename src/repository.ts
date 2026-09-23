@@ -132,17 +132,17 @@ export class PgIdentityRepository
     return result.rows.map(toIdentity)
   }
 
-  async findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null> {
+  async findNip05Identity(domain: string, localPart: string, includePrivate: boolean): Promise<UserIdentity | null> {
     const result = await this.pool.query<IdentityRow>(
       `
         select i.domain, i.local_part, i.pubkey, i.visibility
         from identities i
         left join accounts a on a.pubkey = i.pubkey
-        where i.domain = $1 and i.local_part = $2 and i.visibility = 'public'
+        where i.domain = $1 and i.local_part = $2 and (i.visibility = 'public' or $3::boolean)
           and coalesce(a.active, true) = true
         limit 1
       `,
-      [domain, localPart],
+      [domain, localPart, includePrivate],
     )
 
     const row = result.rows[0]

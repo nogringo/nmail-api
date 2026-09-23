@@ -32,6 +32,7 @@ export async function buildApp(
     InboundNotificationRepository,
   config: Pick<AppConfig, 'inboundDecisionToken' | 'outboundDecisionToken' | 'adminPassword' | 'roleWebhookSigningKey'> & {
     accountDeletionRelayUrls?: string[]
+    nip05PrivateReaders?: string[]
     inboundNotificationToken?: string
     outboundMaxBodyBytes?: number
     roleWebhookMaxBodyBytes?: number
@@ -61,7 +62,7 @@ export async function buildApp(
   await app.register(formbody, { bodyLimit: config.roleWebhookMaxBodyBytes ?? DEFAULT_MAX_BODY_BYTES })
 
   app.get('/healthz', async () => 'ok')
-  app.get('/.well-known/nostr.json', createNip05Handler(repo))
+  app.get('/.well-known/nostr.json', createNip05Handler(repo, { nip05PrivateReaders: config.nip05PrivateReaders ?? [] }))
   app.post('/inbound/decision', createInboundDecisionHandler(repo, config))
   app.post('/inbound/notifications', createInboundNotificationHandler(repo, config, pushNotificationDispatcher))
   app.post('/accounts/vanish', createAccountVanishHandler(repo, { accountDeletionRelayUrls: config.accountDeletionRelayUrls ?? [] }))

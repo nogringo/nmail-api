@@ -29,6 +29,7 @@ export interface Nip98Request {
   path: string
   nowSeconds: number
   payloadHash?: string
+  bindQuery?: boolean
 }
 
 export function verifyNip98(request: Nip98Request): Nip98Result {
@@ -44,12 +45,14 @@ export function verifyNip98(request: Nip98Request): Nip98Result {
   const method = findTagValue(event.tags, 'method')
   if (!method || method.toUpperCase() !== request.method.toUpperCase()) return fail('method_mismatch')
 
-  // Bind to host + path. Scheme and query string are ignored: TLS is usually
-  // terminated by a proxy, and the query only carries idempotent preferences.
+  // Bind to host + path. The scheme is ignored as TLS is usually terminated by a
+  // proxy, and so is the query unless `bindQuery` is set, since it usually only
+  // carries idempotent preferences.
   const signed = parseUrl(findTagValue(event.tags, 'u'))
   if (!signed) return fail('url_mismatch')
   if (normalizeDomain(signed.host) !== normalizeDomain(request.host)) return fail('url_mismatch')
   if (signed.pathname !== pathname(request.path)) return fail('url_mismatch')
+  if (request.bindQuery && signed.search !== search(request.path)) return fail('url_mismatch')
 
   if (request.payloadHash) {
     const payload = findTagValue(event.tags, 'payload')
@@ -88,6 +91,11 @@ function parseUrl(value: string | undefined): URL | null {
 function pathname(path: string): string {
   const query = path.indexOf('?')
   return query === -1 ? path : path.slice(0, query)
+}
+
+function search(path: string): string {
+  const query = path.indexOf('?')
+  return query === -1 ? '' : path.slice(query)
 }
 
 function fail(reason: Nip98Reason): Nip98Result {

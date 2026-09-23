@@ -12,6 +12,7 @@ export interface AppConfig {
   roleWebhookSigningKey?: string
   roleWebhookMaxBodyBytes: number
   accountDeletionRelayUrls: string[]
+  nip05PrivateReaders: string[]
 }
 
 export type IdentityVisibility = 'public' | 'private'
@@ -59,7 +60,7 @@ export interface IdentityInput {
 
 export interface IdentityRepository {
   findIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
-  findPublicIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
+  findNip05Identity(domain: string, localPart: string, includePrivate: boolean): Promise<UserIdentity | null>
   listIdentitiesByPubkey(pubkey: string): Promise<UserIdentity[]>
   listIdentities?(search?: string): Promise<AdminIdentity[]>
   createIdentity?(identity: IdentityInput): Promise<AdminIdentity>

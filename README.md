@@ -2,7 +2,7 @@
 
 TypeScript API for identity resolution and inbound mail policy:
 
-- `GET /.well-known/nostr.json?name=<local_part>` resolves NIP-05 identities.
+- `GET /.well-known/nostr.json?name=<local_part>` resolves NIP-05 identities. Private identities are also returned when the request is signed with NIP-98 by a pubkey listed in `NIP05_PRIVATE_READERS`, with a `u` tag that includes the query.
 - `POST /inbound/decision` answers the inbound SMTP decision protocol.
 - `POST /outbound/decision` answers the outbound (nostr → SMTP) decision protocol, enabled only when `OUTBOUND_DECISION_TOKEN` is set.
 - `PUT/GET/DELETE /aliases[/{name}]` is the REST alias lifecycle (claim, list, release) authenticated with [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) (`Authorization: Nostr <base64 kind-27235 event>`); the signing pubkey owns the aliases it claims, served on the alias domain (request Host). Enforces the per-plan `max_aliases` limit (free 2, premium 10). See [docs/AliasProtocol.md](docs/AliasProtocol.md) and [docs/AccountModel.md](docs/AccountModel.md).
@@ -25,6 +25,7 @@ Environment variables:
 - `INBOUND_NOTIFICATION_TOKEN`: shared secret required by
   `POST /inbound/notifications`.
 - `ACCOUNT_DELETION_RELAY_URLS`: comma-separated `ws://` or `wss://` relay URLs accepted by `POST /accounts/vanish`.
+- `NIP05_PRIVATE_READERS`: optional comma-separated pubkeys (hex or `npub`) allowed to resolve private identities through `/.well-known/nostr.json`, for example the inbound webhook's key so it can deliver to private aliases.
 - `GOOGLE_APPLICATION_CREDENTIALS`: path to the Firebase service-account JSON
   used for FCM delivery. The project ID is read from this file.
 - `WEB_PUSH_VAPID_SUBJECT`, `WEB_PUSH_VAPID_PUBLIC_KEY`,
@@ -47,7 +48,7 @@ The data model separates the **account** (the user, keyed by pubkey) from the
   with no account row behaves as active, mail enabled, default plan.
 - `identities` maps an alias (`local_part@domain`) to a pubkey and carries only
   `visibility` (`public` is resolvable through `/.well-known/nostr.json`,
-  `private` is hidden).
+  `private` is hidden except from `NIP05_PRIVATE_READERS`).
 - `plans` hold quotas (rate, max `.eml` size, max recipients) and
   `allowed_domains` (which domains the plan may create/use addresses on).
 

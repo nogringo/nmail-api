@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { npubEncode } from 'nostr-tools/nip19'
 import { loadConfig } from '../src/config.js'
 
 test('loadConfig requires INBOUND_DECISION_TOKEN', () => {
@@ -39,6 +40,28 @@ test('loadConfig rejects invalid account deletion relay URLs', () => {
         ACCOUNT_DELETION_RELAY_URLS: 'https://relay.example.com',
       }),
     /ACCOUNT_DELETION_RELAY_URLS/,
+  )
+})
+
+test('loadConfig parses NIP-05 private readers from hex pubkeys and npubs', () => {
+  const config = loadConfig({
+    DATABASE_URL: 'postgres://localhost/nmail',
+    INBOUND_DECISION_TOKEN: 'secret-token',
+    NIP05_PRIVATE_READERS: `${'A'.repeat(64)}, ${npubEncode('b'.repeat(64))}`,
+  })
+
+  assert.deepEqual(config.nip05PrivateReaders, ['a'.repeat(64), 'b'.repeat(64)])
+})
+
+test('loadConfig rejects invalid NIP-05 private readers', () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        DATABASE_URL: 'postgres://localhost/nmail',
+        INBOUND_DECISION_TOKEN: 'secret-token',
+        NIP05_PRIVATE_READERS: 'alice',
+      }),
+    /NIP05_PRIVATE_READERS/,
   )
 })
 

@@ -1,5 +1,5 @@
 import type { AppConfig } from './types.js'
-import { normalizeRelayUrl } from './nostr.js'
+import { decodeNpub, normalizeRelayUrl } from './nostr.js'
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const databaseUrl = env.DATABASE_URL
@@ -22,6 +22,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     roleWebhookSigningKey: parseOptionalSecret(env.WEBHOOK_SIGNING_KEY),
     roleWebhookMaxBodyBytes: parseMaxBodyBytes(env.ROLE_WEBHOOK_MAX_BODY_BYTES, 'ROLE_WEBHOOK_MAX_BODY_BYTES'),
     accountDeletionRelayUrls: parseRelayUrls(env.ACCOUNT_DELETION_RELAY_URLS),
+    nip05PrivateReaders: parseNip05PrivateReaders(env.NIP05_PRIVATE_READERS),
   }
 }
 
@@ -101,5 +102,22 @@ function parseRelayUrls(value: string | undefined): string[] {
       throw new Error('ACCOUNT_DELETION_RELAY_URLS must contain comma-separated ws:// or wss:// URLs')
     }
     return relayUrl
+  })
+}
+
+function parseNip05PrivateReaders(value: string | undefined): string[] {
+  const entries = value
+    ?.split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean)
+
+  if (!entries?.length) return []
+
+  return entries.map((entry) => {
+    const pubkey = /^[0-9a-f]{64}$/.test(entry) ? entry : decodeNpub(entry)
+    if (!pubkey) {
+      throw new Error('NIP05_PRIVATE_READERS must contain comma-separated hex pubkeys or npubs')
+    }
+    return pubkey
   })
 }

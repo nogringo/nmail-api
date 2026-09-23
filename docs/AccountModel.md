@@ -117,6 +117,12 @@ carries the idempotent `visibility` preference). Auth failures return `401` with
 `name` -> public identity (alias) -> pubkey, then `relays` come from the
 **account** of that pubkey.
 
+A request signed with NIP-98 by a pubkey in `NIP05_PRIVATE_READERS` also
+resolves `private` identities, which lets the inbound webhook deliver to them.
+The signed `u` must include the query, so a captured token cannot be replayed
+for another name. Any other signature gets the public view rather than a `401`,
+and reader responses carry `Cache-Control: no-store`.
+
 ## Migrations
 
 - `003` creates `plans`, `accounts`, `outbound_sends` (no `pubkey_plans`).
