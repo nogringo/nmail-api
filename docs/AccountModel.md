@@ -49,8 +49,10 @@ behaves as `active = true`, `mail_enabled = true`, default plan.
 
 For `localPart@domain` with authenticated `nostrSender`:
 
-1. `domain` must be in the `domains` table, else `deny unauthorized_sender`
-   (anti open-relay).
+1. The MIME must have exactly one `From` header holding exactly one address,
+   `domain` must be in the `domains` table (anti open-relay), and every rumor
+   `mail-from` tag (the SMTP envelope sender) must be this address. Else
+   `deny unauthorized_sender`.
 2. Ownership:
    - if an `identities` row exists for `(domain, localPart)`: its pubkey must be
      the sender. Alias exists => **grandfathered**, no domain/plan check.
@@ -59,7 +61,7 @@ For `localPart@domain` with authenticated `nostrSender`:
      `allowed_domains` (empty list = all managed domains).
    - else `deny unauthorized_sender`.
 3. Account must be `active` and `mail_enabled`, else `deny account_disabled`.
-4. Plan quotas: recipients (`To`+`Cc`+`Bcc`), `.eml` size (`rawMime`), sliding
+4. Plan quotas: recipients (rumor `rcpt-to` tags), `.eml` size (`rawMime`), sliding
    rate window (minute/hour/day). Over limit => `deny` with the matching reason.
 5. Idempotent on `giftWrapId` (already recorded => allow without recounting).
 

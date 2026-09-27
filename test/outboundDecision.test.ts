@@ -11,6 +11,7 @@ const basePayload: OutboundDecisionPayload = {
   mode: 'minimal',
   giftWrapId: 'wrap-1',
   nostrSender: SENDER,
+  rumor: { tags: [['mail-from', 'alice@nmail.li'], ['rcpt-to', 'bob@example.com']] },
   headers: [['From', 'alice@nmail.li']],
 }
 
@@ -47,6 +48,7 @@ test('Outbound decision resolves npub From local parts', async () => {
   const repo = new MemoryIdentityRepository()
   repo.add(identity({ localPart: 'alice', pubkey: SENDER }))
   const app = await buildApp(repo, appConfig)
+  const address = 'npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzqujme@nmail.li'
 
   const response = await app.inject({
     method: 'POST',
@@ -54,12 +56,82 @@ test('Outbound decision resolves npub From local parts', async () => {
     headers: { 'x-outbound-decision-token': 'outbound-token' },
     payload: {
       ...basePayload,
-      headers: [['From', 'Alice <npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqzqujme@nmail.li>']],
+      rumor: { tags: [['mail-from', address], ['rcpt-to', 'bob@example.com']] },
+      headers: [['From', `Alice <${address}>`]],
     },
   })
 
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.json(), { decision: 'allow' })
+
+  await app.close()
+})
+
+test('Outbound decision matches mail-from to the From address case-insensitively', async () => {
+  const repo = new MemoryIdentityRepository()
+  repo.add(identity({ localPart: 'alice', pubkey: SENDER }))
+  const app = await buildApp(repo, appConfig)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/outbound/decision',
+    headers: { 'x-outbound-decision-token': 'outbound-token' },
+    payload: {
+      ...basePayload,
+      rumor: { tags: [['mail-from', 'Alice@NMail.li'], ['rcpt-to', 'bob@example.com']] },
+      headers: [['From', 'Alice <Alice@NMail.li>']],
+    },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), { decision: 'allow' })
+
+  await app.close()
+})
+
+test('Outbound decision denies a mail-from other than the From address', async () => {
+  const repo = new MemoryIdentityRepository()
+  repo.add(identity({ localPart: 'alice', pubkey: SENDER }))
+  repo.add(identity({ localPart: 'bob', pubkey: '1'.repeat(64) }))
+  const app = await buildApp(repo, appConfig)
+
+  const forgedEnvelopes = [
+    [['mail-from', 'victim@example.com']],
+    [['mail-from', 'bob@nmail.li']],
+    [['mail-from', 'alice@nmail.li'], ['mail-from', 'victim@example.com']],
+    [['mail-from', 'Alice <alice@nmail.li>']],
+    [],
+  ]
+
+  for (const mailFrom of forgedEnvelopes) {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/outbound/decision',
+      headers: { 'x-outbound-decision-token': 'outbound-token' },
+      payload: { ...basePayload, rumor: { tags: [...mailFrom, ['rcpt-to', 'bob@example.com']] } },
+    })
+
+    assert.equal(response.statusCode, 200)
+    assert.deepEqual(response.json(), deniedSender, JSON.stringify(mailFrom))
+  }
+
+  await app.close()
+})
+
+test('Outbound decision denies payloads without a rumor', async () => {
+  const repo = new MemoryIdentityRepository()
+  repo.add(identity({ localPart: 'alice', pubkey: SENDER }))
+  const app = await buildApp(repo, appConfig)
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/outbound/decision',
+    headers: { 'x-outbound-decision-token': 'outbound-token' },
+    payload: { ...basePayload, rumor: undefined },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json(), deniedSender)
 
   await app.close()
 })
@@ -134,6 +206,33 @@ test('Outbound decision denies when the From header is missing', async () => {
 
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.json(), deniedSender)
+
+  await app.close()
+})
+
+test('Outbound decision denies a From that is not exactly one address', async () => {
+  const repo = new MemoryIdentityRepository()
+  repo.add(identity({ localPart: 'alice', pubkey: SENDER }))
+  const app = await buildApp(repo, appConfig)
+
+  const forgedHeaders: Array<Array<[string, string]>> = [
+    [['From', 'alice@nmail.li'], ['From', 'ceo@bank.com']],
+    [['From', '<alice@nmail.li>, <ceo@bank.com>']],
+    [['From', 'ceo@bank.com, <alice@nmail.li>']],
+    [['From', '"<alice@nmail.li>" <ceo@bank.com>']],
+  ]
+
+  for (const headers of forgedHeaders) {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/outbound/decision',
+      headers: { 'x-outbound-decision-token': 'outbound-token' },
+      payload: { ...basePayload, headers },
+    })
+
+    assert.equal(response.statusCode, 200)
+    assert.deepEqual(response.json(), deniedSender, JSON.stringify(headers))
+  }
 
   await app.close()
 })

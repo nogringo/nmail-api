@@ -11,12 +11,18 @@ const appConfig = {
   outboundDecisionToken: 'outbound-token',
 }
 
+function envelope(recipientCount: number): OutboundDecisionPayload['rumor'] {
+  const recipients = Array.from({ length: recipientCount }, (_, index) => ['rcpt-to', 'r' + index + '@x.com'])
+  return { tags: [['mail-from', 'alice@nmail.li'], ...recipients] }
+}
+
 function payload(overrides: Partial<OutboundDecisionPayload> = {}): OutboundDecisionPayload {
   return {
     protocol: 'nostr-smtp.decision.v1',
     mode: 'full',
     giftWrapId: 'wrap-1',
     nostrSender: SENDER,
+    rumor: envelope(1),
     headers: [['From', 'alice@nmail.li']],
     ...overrides,
   }
@@ -42,10 +48,10 @@ test('Outbound policy denies messages with more recipients than the plan allows'
   const { app } = await withSender()
 
   const response = await send(app, payload({
+    rumor: envelope(6),
     headers: [
       ['From', 'alice@nmail.li'],
-      ['To', 'a@x.com, b@x.com, c@x.com'],
-      ['Cc', 'd@x.com, e@x.com, f@x.com'],
+      ['To', 'r0@x.com'],
     ],
   }))
 
@@ -59,12 +65,7 @@ test('Outbound policy denies messages with more recipients than the plan allows'
 test('Outbound policy allows recipient counts at the plan limit', async () => {
   const { app } = await withSender()
 
-  const response = await send(app, payload({
-    headers: [
-      ['From', 'alice@nmail.li'],
-      ['To', 'a@x.com, b@x.com, c@x.com, d@x.com, e@x.com'],
-    ],
-  }))
+  const response = await send(app, payload({ rumor: envelope(5) }))
 
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.json(), { decision: 'allow' })
@@ -115,13 +116,7 @@ test('Outbound policy uses the plan assigned to the pubkey', async () => {
   repo.setAccount(SENDER, { plan: 'premium' })
 
   // 10 recipients is over free (5) but within premium (10).
-  const recipients = Array.from({ length: 10 }, (_, index) => 'r' + index + '@x.com').join(', ')
-  const response = await send(app, payload({
-    headers: [
-      ['From', 'alice@nmail.li'],
-      ['To', recipients],
-    ],
-  }))
+  const response = await send(app, payload({ rumor: envelope(10) }))
 
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.json(), { decision: 'allow' })

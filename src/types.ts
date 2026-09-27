@@ -149,7 +149,7 @@ export interface OutboundDecisionPayload {
   mode?: 'minimal' | 'summary' | 'full'
   giftWrapId?: string
   nostrSender: string
-  rumor?: unknown
+  rumor?: { tags?: string[][] }
   headers?: Array<[string, string]>
   rawMime?: string
 }

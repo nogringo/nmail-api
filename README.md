@@ -194,16 +194,19 @@ DECISION_PAYLOAD_MODE=full
 Use `full` mode so the bridge forwards the complete `.eml` (`rawMime`); the
 message size limit can only be enforced when the `.eml` is present.
 
-The bridge posts the authenticated seal pubkey as `nostrSender` and the message
-MIME `headers`. The endpoint applies, in order:
+The bridge posts the authenticated seal pubkey as `nostrSender`, the message
+MIME `headers`, and the `rumor`, whose `mail-from` and `rcpt-to` tags are the SMTP
+envelope the bridge sends with. The endpoint applies, in order:
 
-1. **Ownership**: the `From` domain must be a managed domain, and either a matching
-   `identities` alias is owned by `nostrSender` (a provisioned alias, which keeps
-   working regardless of the current plan), or the local part decodes to
-   `nostrSender` (a pubkey-encoded address). Encoded addresses also auto-create a
-   free account and must be on a domain allowed by the current plan.
+1. **Ownership**: the message must have one `From` header holding one address on a
+   managed domain, and either a matching `identities` alias is owned by
+   `nostrSender` (a provisioned alias, which keeps working regardless of the
+   current plan), or the local part decodes to `nostrSender` (a pubkey-encoded
+   address). Encoded addresses also auto-create a free account and must be on a
+   domain allowed by the current plan. Every `mail-from` tag must be that same
+   `From` address.
 2. **Account**: the sender account must be `active` and `mail_enabled`.
-3. **Plan limits** for the sender pubkey: recipient count (`To` + `Cc` + `Bcc`),
+3. **Plan limits** for the sender pubkey: recipient count (`rcpt-to` tags),
    message size (the `.eml` byte length), and a sliding send-rate window (per
    minute, hour, day).
 

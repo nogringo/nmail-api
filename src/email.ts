@@ -3,6 +3,11 @@ export interface ParsedEmailAddress {
   domain: string
 }
 
+const ADDRESS = /[^\s"\\<>()[\],;:@]+@[^\s"\\<>()[\],;:@]+/.source
+const DISPLAY_NAME = /(?:"(?:[^"\\]|\\.)*"|[^"\\<>()[\],;:@])*/.source
+// Stricter than RFC 5322 on purpose (no comments, groups or lists): nothing may read as a second address.
+const SINGLE_MAILBOX = new RegExp(`^(?:${DISPLAY_NAME}<(${ADDRESS})>|\\s*(${ADDRESS}))\\s*$`)
+
 export function normalizeDomain(value: string): string {
   const firstHost = value.split(',')[0]?.trim() ?? ''
   const withoutPort = stripPort(firstHost)
@@ -25,6 +30,11 @@ export function parseEmailAddress(value: string): ParsedEmailAddress | null {
   if (!localPart || !domain) return null
 
   return { localPart, domain }
+}
+
+export function parseSingleMailbox(value: string): ParsedEmailAddress | null {
+  const match = SINGLE_MAILBOX.exec(value)
+  return match ? parseEmailAddress(match[1] ?? match[2]) : null
 }
 
 function extractAddress(value: string): string {

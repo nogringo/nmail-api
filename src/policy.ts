@@ -48,48 +48,6 @@ export function messageByteSize(rawMime: string | undefined): number {
   return Buffer.byteLength(rawMime, 'utf8')
 }
 
-export function countRecipients(headers: Array<[string, string]> | undefined): number {
-  if (!Array.isArray(headers)) return 0
-
-  let total = 0
-  for (const entry of headers) {
-    if (!Array.isArray(entry) || typeof entry[0] !== 'string' || typeof entry[1] !== 'string') continue
-
-    const name = entry[0].toLowerCase()
-    if (name === 'to' || name === 'cc' || name === 'bcc') {
-      total += splitAddressList(entry[1]).length
-    }
-  }
-
-  return total
-}
-
-// Split an address-list header value on commas, ignoring commas inside quoted
-// display names or inside <angle brackets>.
-function splitAddressList(value: string): string[] {
-  const parts: string[] = []
-  let current = ''
-  let inQuotes = false
-  let depth = 0
-
-  for (const char of value) {
-    if (char === '"') inQuotes = !inQuotes
-    else if (char === '<') depth += 1
-    else if (char === '>' && depth > 0) depth -= 1
-
-    if (char === ',' && !inQuotes && depth === 0) {
-      if (current.trim()) parts.push(current.trim())
-      current = ''
-      continue
-    }
-
-    current += char
-  }
-
-  if (current.trim()) parts.push(current.trim())
-  return parts
-}
-
 export function sanitizePlanLimits(value: unknown): PlanLimits | null {
   if (!value || typeof value !== 'object') return null
 

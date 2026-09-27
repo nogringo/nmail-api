@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { parseEmailAddress } from '../email.js'
+import { parseSingleMailbox } from '../email.js'
 import { decodeEncodedLocalPart, decodeNpub } from '../nostr.js'
-import { countRecipients, isDomainAllowed, isRateLimited, messageByteSize } from '../policy.js'
+import { isDomainAllowed, isRateLimited, messageByteSize } from '../policy.js'
 import type {
   AccountRepository,
   DomainRepository,
@@ -49,11 +49,18 @@ export async function decideSending(
   const sender = normalizePubkey(payload.nostrSender)
   if (!sender) return denyUnauthorizedSender()
 
-  const fromHeader = findHeaderValue(payload.headers, 'from')
+  const fromHeader = findSingleHeaderValue(payload.headers, 'from')
   if (!fromHeader) return denyUnauthorizedSender()
 
-  const parsed = parseEmailAddress(fromHeader)
+  const parsed = parseSingleMailbox(fromHeader)
   if (!parsed || !domains.has(parsed.domain)) return denyUnauthorizedSender()
+
+  const envelope = payload.rumor?.tags
+  const fromAddress = `${parsed.localPart}@${parsed.domain}`
+  const mailFrom = findTagValues(envelope, 'mail-from')
+  if (!mailFrom.length || mailFrom.some((value) => value.toLowerCase() !== fromAddress)) {
+    return denyUnauthorizedSender()
+  }
 
   const ownership = await resolveOwnership(parsed.domain, parsed.localPart, sender, repo)
   if (ownership === 'denied') return denyUnauthorizedSender()
@@ -73,7 +80,7 @@ export async function decideSending(
     return denyDomainNotAllowed(parsed.domain)
   }
 
-  const recipients = countRecipients(payload.headers)
+  const recipients = findTagValues(envelope, 'rcpt-to').length
   if (recipients > plan.maxRecipients) return denyTooManyRecipients(plan.maxRecipients)
 
   // Message size is only enforceable when the bridge forwards the full .eml
@@ -122,17 +129,23 @@ function normalizePubkey(value: string | undefined): string | null {
   return decodeNpub(trimmed)
 }
 
-function findHeaderValue(headers: Array<[string, string]> | undefined, name: string): string | null {
+function findSingleHeaderValue(headers: Array<[string, string]> | undefined, name: string): string | null {
   if (!Array.isArray(headers)) return null
 
   const target = name.toLowerCase()
-  for (const entry of headers) {
-    if (Array.isArray(entry) && typeof entry[0] === 'string' && entry[0].toLowerCase() === target) {
-      return typeof entry[1] === 'string' ? entry[1] : null
-    }
-  }
+  const matches = headers.filter(
+    (entry) => Array.isArray(entry) && typeof entry[0] === 'string' && entry[0].toLowerCase() === target,
+  )
 
-  return null
+  return matches.length === 1 && typeof matches[0][1] === 'string' ? matches[0][1] : null
+}
+
+function findTagValues(tags: string[][] | undefined, name: string): string[] {
+  if (!Array.isArray(tags)) return []
+
+  return tags
+    .filter((tag) => Array.isArray(tag) && tag[0] === name && typeof tag[1] === 'string')
+    .map((tag) => tag[1])
 }
 
 function denyUnauthorizedSender(): OutboundDecisionResponse {
