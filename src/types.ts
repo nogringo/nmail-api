@@ -58,11 +58,22 @@ export interface IdentityInput {
   visibility: IdentityVisibility
 }
 
+export interface PageQuery {
+  search: string
+  offset: number
+  limit: number
+}
+
+export interface Page<T> {
+  items: T[]
+  total: number
+}
+
 export interface IdentityRepository {
   findIdentity(domain: string, localPart: string): Promise<UserIdentity | null>
   findNip05Identity(domain: string, localPart: string, includePrivate: boolean): Promise<UserIdentity | null>
   listIdentitiesByPubkey(pubkey: string): Promise<UserIdentity[]>
-  listIdentities?(search?: string): Promise<AdminIdentity[]>
+  listIdentities?(query: PageQuery): Promise<Page<AdminIdentity>>
   createIdentity?(identity: IdentityInput): Promise<AdminIdentity>
   updateIdentity?(id: string, identity: IdentityInput): Promise<AdminIdentity | null>
   deleteIdentity?(id: string): Promise<boolean>
@@ -80,7 +91,7 @@ export interface DomainRepository {
 export interface AccountRepository {
   getAccount(pubkey: string): Promise<Account | null>
   getOrCreateAccount(pubkey: string): Promise<Account>
-  listAccounts?(search?: string): Promise<Account[]>
+  listAccounts?(query: PageQuery): Promise<Page<Account>>
   upsertAccount?(pubkey: string, input: AccountInput): Promise<Account>
   deleteAccount?(pubkey: string): Promise<boolean>
   deleteAccountData(pubkey: string): Promise<void>
@@ -191,7 +202,7 @@ export interface RoleMessage extends RoleMessageSummary {
 
 export interface RoleMessageRepository {
   recordRoleMessage(input: RoleMessageInput): Promise<void>
-  listRoleMessages?(search?: string): Promise<RoleMessageSummary[]>
+  listRoleMessages?(query: PageQuery): Promise<Page<RoleMessageSummary>>
   getRoleMessage?(id: string): Promise<RoleMessage | null>
   deleteRoleMessage?(id: string): Promise<boolean>
 }

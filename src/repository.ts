@@ -11,6 +11,8 @@ import type {
   IdentityVisibility,
   InboundNotificationRepository,
   OutboundSendCounts,
+  Page,
+  PageQuery,
   Plan,
   PlanLimits,
   PolicyRepository,
@@ -26,6 +28,10 @@ import type {
 } from './types.js'
 
 const { Pool } = pg
+
+interface CountRow {
+  total: number
+}
 
 interface IdentityRow {
   id?: string
@@ -149,29 +155,24 @@ export class PgIdentityRepository
     return row ? toIdentity(row) : null
   }
 
-  async listIdentities(search = ''): Promise<AdminIdentity[]> {
-    const normalizedSearch = search.trim().toLowerCase()
-    const result = normalizedSearch
-      ? await this.pool.query<IdentityRow>(
-          `
-            select id, domain, local_part, pubkey, visibility, created_at, updated_at
-            from identities
-            where domain like $1 or local_part like $1 or pubkey like $1
-            order by domain asc, local_part asc
-            limit 200
-          `,
-          [`%${normalizedSearch}%`],
-        )
-      : await this.pool.query<IdentityRow>(
-          `
-            select id, domain, local_part, pubkey, visibility, created_at, updated_at
-            from identities
-            order by domain asc, local_part asc
-            limit 200
-          `,
-        )
+  async listIdentities({ search, offset, limit }: PageQuery): Promise<Page<AdminIdentity>> {
+    const where = 'where domain like $1 or local_part like $1 or pubkey like $1'
+    const pattern = searchPattern(search)
+    const [result, count] = await Promise.all([
+      this.pool.query<IdentityRow>(
+        `
+          select id, domain, local_part, pubkey, visibility, created_at, updated_at
+          from identities
+          ${where}
+          order by domain asc, local_part asc
+          limit $2 offset $3
+        `,
+        [pattern, limit, offset],
+      ),
+      this.pool.query<CountRow>(`select count(*)::int as total from identities ${where}`, [pattern]),
+    ])
 
-    return result.rows.map(toAdminIdentity)
+    return { items: result.rows.map(toAdminIdentity), total: count.rows[0].total }
   }
 
   async createIdentity(identity: IdentityInput): Promise<AdminIdentity> {
@@ -285,29 +286,24 @@ export class PgIdentityRepository
     return toAccount(result.rows[0])
   }
 
-  async listAccounts(search = ''): Promise<Account[]> {
-    const normalizedSearch = search.trim().toLowerCase()
-    const result = normalizedSearch
-      ? await this.pool.query<AccountRow>(
-          `
-            select pubkey, active, mail_enabled, plan, relays, created_at, updated_at
-            from accounts
-            where pubkey like $1 or coalesce(plan, '') like $1
-            order by updated_at desc
-            limit 200
-          `,
-          [`%${normalizedSearch}%`],
-        )
-      : await this.pool.query<AccountRow>(
-          `
-            select pubkey, active, mail_enabled, plan, relays, created_at, updated_at
-            from accounts
-            order by updated_at desc
-            limit 200
-          `,
-        )
+  async listAccounts({ search, offset, limit }: PageQuery): Promise<Page<Account>> {
+    const where = "where pubkey like $1 or coalesce(plan, '') like $1"
+    const pattern = searchPattern(search)
+    const [result, count] = await Promise.all([
+      this.pool.query<AccountRow>(
+        `
+          select pubkey, active, mail_enabled, plan, relays, created_at, updated_at
+          from accounts
+          ${where}
+          order by updated_at desc, pubkey asc
+          limit $2 offset $3
+        `,
+        [pattern, limit, offset],
+      ),
+      this.pool.query<CountRow>(`select count(*)::int as total from accounts ${where}`, [pattern]),
+    ])
 
-    return result.rows.map(toAccount)
+    return { items: result.rows.map(toAccount), total: count.rows[0].total }
   }
 
   async upsertAccount(pubkey: string, input: AccountInput): Promise<Account> {
@@ -501,29 +497,24 @@ export class PgIdentityRepository
     )
   }
 
-  async listRoleMessages(search = ''): Promise<RoleMessageSummary[]> {
-    const normalizedSearch = search.trim().toLowerCase()
-    const result = normalizedSearch
-      ? await this.pool.query<RoleMessageRow>(
-          `
-            select id, recipient, sender, from_addr, subject, received_at
-            from role_messages
-            where recipient like $1 or sender like $1 or subject like $1
-            order by received_at desc
-            limit 200
-          `,
-          [`%${normalizedSearch}%`],
-        )
-      : await this.pool.query<RoleMessageRow>(
-          `
-            select id, recipient, sender, from_addr, subject, received_at
-            from role_messages
-            order by received_at desc
-            limit 200
-          `,
-        )
+  async listRoleMessages({ search, offset, limit }: PageQuery): Promise<Page<RoleMessageSummary>> {
+    const where = 'where recipient like $1 or sender like $1 or subject like $1'
+    const pattern = searchPattern(search)
+    const [result, count] = await Promise.all([
+      this.pool.query<RoleMessageRow>(
+        `
+          select id, recipient, sender, from_addr, subject, received_at
+          from role_messages
+          ${where}
+          order by received_at desc, id desc
+          limit $2 offset $3
+        `,
+        [pattern, limit, offset],
+      ),
+      this.pool.query<CountRow>(`select count(*)::int as total from role_messages ${where}`, [pattern]),
+    ])
 
-    return result.rows.map(toRoleMessageSummary)
+    return { items: result.rows.map(toRoleMessageSummary), total: count.rows[0].total }
   }
 
   async getRoleMessage(id: string): Promise<RoleMessage | null> {
@@ -638,6 +629,11 @@ export class PgIdentityRepository
   async close(): Promise<void> {
     await this.pool.end()
   }
+}
+
+// An empty search yields '%%', which matches every row since the searched columns are not null.
+function searchPattern(search: string): string {
+  return `%${search.trim().toLowerCase()}%`
 }
 
 function toStringArray(value: unknown): string[] {

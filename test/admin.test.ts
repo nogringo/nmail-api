@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildApp } from '../src/app.js'
+import { adminPageSize } from '../src/handlers/admin.js'
 import { identity, MemoryIdentityRepository } from './helpers.js'
 
 const appConfig = {
@@ -129,6 +130,31 @@ test('Admin API returns useful errors for validation and duplicate identities', 
     error: 'identity_already_exists',
     message: 'An identity already exists for this domain and local part',
   })
+
+  await app.close()
+})
+
+test('Admin API pages identities and reports the total', async () => {
+  const repo = new MemoryIdentityRepository()
+  for (let index = 0; index < adminPageSize + 5; index += 1) {
+    repo.add(identity({ localPart: `user${String(index).padStart(3, '0')}` }))
+  }
+  const app = await buildApp(repo, appConfig)
+  const cookie = await login(app)
+
+  const first = await app.inject({ method: 'GET', url: '/admin/api/identities', headers: { cookie } })
+  const second = await app.inject({ method: 'GET', url: `/admin/api/identities?offset=${adminPageSize}`, headers: { cookie } })
+  const invalid = await app.inject({ method: 'GET', url: '/admin/api/identities?offset=-1', headers: { cookie } })
+
+  assert.equal(first.json().identities.length, adminPageSize)
+  assert.equal(first.json().total, adminPageSize + 5)
+  assert.deepEqual(
+    second.json().identities.map((item: { localPart: string }) => item.localPart),
+    ['user200', 'user201', 'user202', 'user203', 'user204'],
+  )
+  assert.equal(second.json().total, adminPageSize + 5)
+  assert.equal(invalid.statusCode, 400)
+  assert.equal(invalid.json().error, 'invalid_offset')
 
   await app.close()
 })

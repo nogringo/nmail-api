@@ -10,6 +10,8 @@ import type {
   IdentityVisibility,
   InboundNotificationRepository,
   OutboundSendCounts,
+  Page,
+  PageQuery,
   Plan,
   PlanLimits,
   PolicyRepository,
@@ -93,9 +95,9 @@ export class MemoryIdentityRepository
     return !account || account.active ? identity : null
   }
 
-  async listIdentities(search = ''): Promise<AdminIdentity[]> {
+  async listIdentities({ search, offset, limit }: PageQuery): Promise<Page<AdminIdentity>> {
     const normalizedSearch = search.trim().toLowerCase()
-    return [...this.identities.values()]
+    const identities = [...this.identities.values()]
       .filter(
         (identity) =>
           !normalizedSearch ||
@@ -104,6 +106,7 @@ export class MemoryIdentityRepository
           identity.pubkey.includes(normalizedSearch),
       )
       .sort((left, right) => `${left.domain}:${left.localPart}`.localeCompare(`${right.domain}:${right.localPart}`))
+    return paginate(identities, offset, limit)
   }
 
   async createIdentity(input: IdentityInput): Promise<AdminIdentity> {
@@ -178,11 +181,12 @@ export class MemoryIdentityRepository
     return this.accounts.get(pubkey) ?? this.ensureAccount(pubkey)
   }
 
-  async listAccounts(search = ''): Promise<Account[]> {
+  async listAccounts({ search, offset, limit }: PageQuery): Promise<Page<Account>> {
     const normalizedSearch = search.trim().toLowerCase()
-    return [...this.accounts.values()]
+    const accounts = [...this.accounts.values()]
       .filter((account) => !normalizedSearch || account.pubkey.includes(normalizedSearch) || (account.plan ?? '').includes(normalizedSearch))
       .map((account) => ({ ...account }))
+    return paginate(accounts, offset, limit)
   }
 
   async upsertAccount(pubkey: string, input: AccountInput): Promise<Account> {
@@ -308,9 +312,9 @@ export class MemoryIdentityRepository
     })
   }
 
-  async listRoleMessages(search = ''): Promise<RoleMessageSummary[]> {
+  async listRoleMessages({ search, offset, limit }: PageQuery): Promise<Page<RoleMessageSummary>> {
     const normalizedSearch = search.trim().toLowerCase()
-    return this.roleMessages
+    const messages = this.roleMessages
       .filter(
         (message) =>
           !normalizedSearch ||
@@ -319,6 +323,7 @@ export class MemoryIdentityRepository
           message.subject.toLowerCase().includes(normalizedSearch),
       )
       .map(({ headers: _headers, bodyMime: _bodyMime, ...summary }) => summary)
+    return paginate(messages, offset, limit)
   }
 
   async getRoleMessage(id: string): Promise<RoleMessage | null> {
@@ -418,6 +423,10 @@ export function identity(overrides: Partial<UserIdentity> = {}): UserIdentity {
     visibility: 'public',
     ...overrides,
   }
+}
+
+function paginate<T>(items: T[], offset: number, limit: number): Page<T> {
+  return { items: items.slice(offset, offset + limit), total: items.length }
 }
 
 function key(domain: string, localPart: string): string {

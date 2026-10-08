@@ -124,6 +124,7 @@ test('Admin sets, lists and deletes an account', async () => {
 
   const listed = await app.inject({ method: 'GET', url: '/admin/api/accounts', headers: { cookie } })
   assert.equal(listed.json().accounts.length, 1)
+  assert.equal(listed.json().total, 1)
 
   const deleted = await app.inject({ method: 'DELETE', url: `/admin/api/accounts/${pubkey}`, headers: { cookie } })
   assert.equal(deleted.statusCode, 204)

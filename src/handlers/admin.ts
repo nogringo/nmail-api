@@ -9,12 +9,14 @@ import type {
   IdentityInput,
   IdentityRepository,
   IdentityVisibility,
+  PageQuery,
   PolicyRepository,
   RoleMessageRepository,
 } from '../types.js'
 
 type AdminRepository = IdentityRepository & AccountRepository & PolicyRepository & DomainRepository & RoleMessageRepository
 
+export const adminPageSize = 200
 const cookieName = 'nmail_admin_session'
 const sessionMaxAgeSeconds = 60 * 60 * 12
 const duplicateConstraint = 'identities_unique_name'
@@ -39,8 +41,9 @@ interface RoleMessageParams {
   id: string
 }
 
-interface IdentityQuery {
+interface ListQuerystring {
   search?: string
+  offset?: string
 }
 
 interface LoginBody {
@@ -76,11 +79,14 @@ export function registerAdminRoutes(app: FastifyInstance, repo: AdminRepository,
     return reply.send({ ok: true })
   })
 
-  app.get('/admin/api/identities', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: IdentityQuery }>, reply) => {
+  app.get('/admin/api/identities', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: ListQuerystring }>, reply) => {
     if (!repo.listIdentities) return reply.code(501).send({ error: 'admin_repository_unavailable' })
 
-    const identities = await repo.listIdentities(request.query.search)
-    return reply.send({ identities })
+    const query = parsePageQuery(request.query)
+    if (!query) return reply.code(400).send({ error: 'invalid_offset', message: 'Offset must be a non-negative integer' })
+
+    const { items, total } = await repo.listIdentities(query)
+    return reply.send({ identities: items, total })
   })
 
   app.post('/admin/api/identities', { preHandler: auth }, async (request, reply) => {
@@ -153,11 +159,14 @@ export function registerAdminRoutes(app: FastifyInstance, repo: AdminRepository,
     return reply.code(204).send()
   })
 
-  app.get('/admin/api/accounts', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: IdentityQuery }>, reply) => {
+  app.get('/admin/api/accounts', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: ListQuerystring }>, reply) => {
     if (!repo.listAccounts) return reply.code(501).send({ error: 'admin_repository_unavailable' })
 
-    const accounts = await repo.listAccounts(request.query.search)
-    return reply.send({ accounts })
+    const query = parsePageQuery(request.query)
+    if (!query) return reply.code(400).send({ error: 'invalid_offset', message: 'Offset must be a non-negative integer' })
+
+    const { items, total } = await repo.listAccounts(query)
+    return reply.send({ accounts: items, total })
   })
 
   app.put('/admin/api/accounts/:pubkey', { preHandler: auth }, async (request: FastifyRequest<{ Params: PubkeyParams }>, reply) => {
@@ -215,11 +224,14 @@ export function registerAdminRoutes(app: FastifyInstance, repo: AdminRepository,
     return reply.code(204).send()
   })
 
-  app.get('/admin/api/role-messages', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: IdentityQuery }>, reply) => {
+  app.get('/admin/api/role-messages', { preHandler: auth }, async (request: FastifyRequest<{ Querystring: ListQuerystring }>, reply) => {
     if (!repo.listRoleMessages) return reply.code(501).send({ error: 'admin_repository_unavailable' })
 
-    const messages = await repo.listRoleMessages(request.query.search)
-    return reply.send({ messages })
+    const query = parsePageQuery(request.query)
+    if (!query) return reply.code(400).send({ error: 'invalid_offset', message: 'Offset must be a non-negative integer' })
+
+    const { items, total } = await repo.listRoleMessages(query)
+    return reply.send({ messages: items, total })
   })
 
   app.get('/admin/api/role-messages/:id', { preHandler: auth }, async (request: FastifyRequest<{ Params: RoleMessageParams }>, reply) => {
@@ -239,6 +251,13 @@ export function registerAdminRoutes(app: FastifyInstance, repo: AdminRepository,
 
     return reply.code(204).send()
   })
+}
+
+function parsePageQuery(query: ListQuerystring): PageQuery | null {
+  const offset = query.offset ?? '0'
+  if (!/^\d{1,9}$/.test(offset)) return null
+
+  return { search: String(query.search ?? ''), offset: Number(offset), limit: adminPageSize }
 }
 
 type ParsedIdentityInput = { ok: true; identity: IdentityInput } | { ok: false; message: string }
@@ -699,6 +718,8 @@ const adminPage = String.raw`<!doctype html>
     .view { display: block; }
     .view.hidden { display: none; }
 
+    .more { margin: 12px 16px; }
+
     .hint {
       margin: 0 16px 12px;
       color: var(--muted);
@@ -775,6 +796,7 @@ const adminPage = String.raw`<!doctype html>
               </thead>
               <tbody id="rows"></tbody>
             </table>
+            <button id="identity-more" class="secondary more hidden" type="button">Load more</button>
           </section>
 
           <aside class="panel">
@@ -901,6 +923,7 @@ const adminPage = String.raw`<!doctype html>
               </thead>
               <tbody id="account-rows"></tbody>
             </table>
+            <button id="account-more" class="secondary more hidden" type="button">Load more</button>
           </section>
 
           <aside class="panel">
@@ -971,6 +994,7 @@ const adminPage = String.raw`<!doctype html>
               </thead>
               <tbody id="role-rows"></tbody>
             </table>
+            <button id="role-more" class="secondary more hidden" type="button">Load more</button>
           </section>
           <aside class="panel">
             <div class="panel-head">
@@ -998,7 +1022,9 @@ const adminPage = String.raw`<!doctype html>
     const search = document.querySelector('#search');
     const formMessage = document.querySelector('#form-message');
     const formTitle = document.querySelector('#form-title');
+    const identityMore = document.querySelector('#identity-more');
     let identities = [];
+    let identityOffset = 0;
     let searchTimer;
 
     function showLogin() {
@@ -1032,11 +1058,31 @@ const adminPage = String.raw`<!doctype html>
       return data;
     }
 
-    async function loadIdentities() {
-      const query = search.value.trim();
-      const data = await request('/admin/api/identities' + (query ? '?search=' + encodeURIComponent(query) : ''));
-      identities = data.identities;
-      count.textContent = String(identities.length);
+    function listPath(path, query, offset) {
+      const params = new URLSearchParams();
+      if (query) params.set('search', query);
+      if (offset) params.set('offset', String(offset));
+      const querystring = params.toString();
+      return path + (querystring ? '?' + querystring : '');
+    }
+
+    // Rows inserted while paging shift the offsets, so the next page can repeat rows already shown.
+    function appendNew(current, next, key) {
+      const seen = new Set(current.map((item) => item[key]));
+      return current.concat(next.filter((item) => !seen.has(item[key])));
+    }
+
+    function showPage(badge, moreButton, loaded, total, nextOffset) {
+      badge.textContent = loaded < total ? loaded + ' / ' + total : String(total);
+      moreButton.classList.toggle('hidden', nextOffset >= total);
+    }
+
+    async function loadIdentities(more = false) {
+      const offset = more ? identityOffset : 0;
+      const data = await request(listPath('/admin/api/identities', search.value.trim(), offset));
+      identities = more ? appendNew(identities, data.identities, 'id') : data.identities;
+      identityOffset = offset + data.identities.length;
+      showPage(count, identityMore, identities.length, data.total, identityOffset);
       rows.innerHTML = identities.map(renderRow).join('');
     }
 
@@ -1154,6 +1200,7 @@ const adminPage = String.raw`<!doctype html>
       clearTimeout(searchTimer);
       searchTimer = setTimeout(() => loadIdentities().catch(() => {}), 180);
     });
+    identityMore.addEventListener('click', () => loadIdentities(true).catch((error) => alert(error.message)));
 
     // --- Plans ---
     const MB = 1024 * 1024;
@@ -1272,6 +1319,7 @@ const adminPage = String.raw`<!doctype html>
 
     // --- Accounts ---
     let accounts = [];
+    let accountOffset = 0;
     let accountSearchTimer;
     const accountRows = document.querySelector('#account-rows');
     const accountCount = document.querySelector('#account-count');
@@ -1280,6 +1328,7 @@ const adminPage = String.raw`<!doctype html>
     const accountFormTitle = document.querySelector('#account-form-title');
     const accountSearch = document.querySelector('#account-search');
     const accountPlanSelect = document.querySelector('#account-plan');
+    const accountMore = document.querySelector('#account-more');
 
     function populateAccountPlanSelect() {
       const current = accountPlanSelect.value;
@@ -1288,11 +1337,12 @@ const adminPage = String.raw`<!doctype html>
       accountPlanSelect.value = current;
     }
 
-    async function loadAccounts() {
-      const query = accountSearch.value.trim();
-      const data = await request('/admin/api/accounts' + (query ? '?search=' + encodeURIComponent(query) : ''));
-      accounts = data.accounts;
-      accountCount.textContent = String(accounts.length);
+    async function loadAccounts(more = false) {
+      const offset = more ? accountOffset : 0;
+      const data = await request(listPath('/admin/api/accounts', accountSearch.value.trim(), offset));
+      accounts = more ? appendNew(accounts, data.accounts, 'pubkey') : data.accounts;
+      accountOffset = offset + data.accounts.length;
+      showPage(accountCount, accountMore, accounts.length, data.total, accountOffset);
       accountRows.innerHTML = accounts.map(renderAccountRow).join('');
     }
 
@@ -1370,6 +1420,7 @@ const adminPage = String.raw`<!doctype html>
       clearTimeout(accountSearchTimer);
       accountSearchTimer = setTimeout(() => loadAccounts().catch(() => {}), 180);
     });
+    accountMore.addEventListener('click', () => loadAccounts(true).catch((error) => alert(error.message)));
 
     // --- Domains ---
     const domainRows = document.querySelector('#domain-rows');
@@ -1415,12 +1466,14 @@ const adminPage = String.raw`<!doctype html>
 
     // --- Role mail ---
     let roleMessages = [];
+    let roleOffset = 0;
     let roleSearchTimer;
     const roleRows = document.querySelector('#role-rows');
     const roleCount = document.querySelector('#role-count');
     const roleSearch = document.querySelector('#role-search');
     const roleDetail = document.querySelector('#role-detail');
     const roleDetailEmpty = document.querySelector('#role-detail-empty');
+    const roleMore = document.querySelector('#role-more');
 
     function formatDate(value) {
       if (!value) return '';
@@ -1428,11 +1481,12 @@ const adminPage = String.raw`<!doctype html>
       return isNaN(date.getTime()) ? value : date.toLocaleString();
     }
 
-    async function loadRoleMessages() {
-      const query = roleSearch.value.trim();
-      const data = await request('/admin/api/role-messages' + (query ? '?search=' + encodeURIComponent(query) : ''));
-      roleMessages = data.messages;
-      roleCount.textContent = String(roleMessages.length);
+    async function loadRoleMessages(more = false) {
+      const offset = more ? roleOffset : 0;
+      const data = await request(listPath('/admin/api/role-messages', roleSearch.value.trim(), offset));
+      roleMessages = more ? appendNew(roleMessages, data.messages, 'id') : data.messages;
+      roleOffset = offset + data.messages.length;
+      showPage(roleCount, roleMore, roleMessages.length, data.total, roleOffset);
       roleRows.innerHTML = roleMessages.map(renderRoleRow).join('');
     }
 
@@ -1490,6 +1544,7 @@ const adminPage = String.raw`<!doctype html>
       clearTimeout(roleSearchTimer);
       roleSearchTimer = setTimeout(() => loadRoleMessages().catch(() => {}), 180);
     });
+    roleMore.addEventListener('click', () => loadRoleMessages(true).catch((error) => alert(error.message)));
 
     // --- Tabs ---
     let plansLoaded = false;
