@@ -20,6 +20,7 @@ RUN addgroup -S nmail && adduser -S nmail -G nmail
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
+COPY migrations ./migrations
 
 USER nmail
 EXPOSE 3000

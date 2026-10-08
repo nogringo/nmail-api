@@ -71,19 +71,17 @@ Run the all-in-one stack with the API and Postgres:
 docker compose -f docker-compose.aio.yml up -d
 ```
 
-Apply migrations against the target database, in order:
+The API applies the pending files of `migrations/` at startup, in order, each in
+its own transaction, and records them in the `schema_migrations` table. A failed
+migration stops the startup.
 
-```sh
-for migration in migrations/*.sql; do psql "$DATABASE_URL" -f "$migration"; done
-```
+A database set up before `schema_migrations` existed must be up to date with
+`011_index_push_subscriptions_destination.sql` before upgrading: the API then
+marks `001` to `011` as applied and runs only the newer files. It refuses to
+start on an older database.
 
-When using the all-in-one Compose file, the exposed local database URL is:
-
-```sh
-for migration in migrations/*.sql; do \
-  psql "postgres://nmail:nmail@localhost:5432/nmail" -f "$migration"; \
-done
-```
+To add a migration, create the next numbered `.sql` file. Applied files are
+never re-run, so never edit one after it has shipped.
 
 Example account and identity (the account row is created automatically when an
 identity is added, so it is only needed to override the defaults):
@@ -144,16 +142,7 @@ docker compose -f docker-compose.dev.yml up -d
 The dev database uses `nmail:nmail` on `localhost:5432`, matching the
 `DATABASE_URL` from `.env.example`.
 
-Apply the database migrations to the dev Postgres container:
-
-```sh
-for migration in migrations/*.sql; do \
-  docker compose -f docker-compose.dev.yml exec -T postgres \
-    psql -U nmail -d nmail < "$migration"; \
-done
-```
-
-Then run the API directly on your machine:
+Then run the API directly on your machine (it applies the migrations at startup):
 
 ```sh
 npm run dev
